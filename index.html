@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ASL SK Digital</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { overflow: hidden; background: #111; }
+    #container { width: 100vw; height: 100vh; }
+    #hex-status {
+      position: fixed;
+      bottom: 8px;
+      left: 8px;
+      color: #fff;
+      background: rgba(0, 0, 0, 0.65);
+      padding: 3px 8px;
+      font-family: monospace;
+      font-size: 13px;
+      border-radius: 4px;
+      pointer-events: none;
+    }
+  </style>
+</head>
+<body>
+  <div id="container"></div>
+  <div id="hex-status"></div>
+  <script src="https://unpkg.com/konva@9/konva.min.js"></script>
+<script type="module" src="main.js"></script>
+</body>
+</html>
