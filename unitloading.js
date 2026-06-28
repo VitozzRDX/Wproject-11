@@ -1,0 +1,186 @@
+import { State } from './state.js';
+import { hexToPixel } from './hexUtils.js';
+import { Rules } from './rules.js';
+
+// ---------------------------------------------------------------------------
+// Цепочка наследования
+// ---------------------------------------------------------------------------
+const Unit             = { state: 'ready' };
+const Infantry         = { ...Unit, hasStartedMoving: false, movementCompleted: false,
+                                    leaderBonus: 0, roadBonus: 1, usedWoodsRoad: false,
+                                    broken: false, pinned: false, wounded: false, exhausted: false,
+                                    doubleTime: false, assaultMovement: false };
+const Squad            = { ...Infantry, type: 'squad', mf: 4, leaderBonus: 2 };
+const Leader           = { ...Infantry, type: 'leader', mf: 6, quality: 'Elite' };
+const GermanSquad_1st  = { ...Squad,  nation: 'german', quality: '1stLine', selfRally: true  };
+const SovietSquad_Elite= { ...Squad,  nation: 'soviet', quality: 'Elite',   selfRally: true  };
+const GermanLeader     = { ...Leader, nation: 'german' };
+const SovietLeader     = { ...Leader, nation: 'soviet' };
+
+// ---------------------------------------------------------------------------
+// Шаблоны — только уникальные цифры
+// ---------------------------------------------------------------------------
+const TEMPLATES = {
+  'ge_467': { ...GermanSquad_1st, firepower: 4, range: 6, morale: 7, src: './graf/ge467S.gif', brokenSrc: './graf/geh7b.gif' },
+  'so_628': { ...SovietSquad_Elite, firepower: 6, range: 2, morale: 8, src: './graf/ru628S.gif' },
+  'ge_L91': { ...GermanLeader, morale: 9, leadershipModifier: -1, selfRally: true, src: './graf/geL91.gif' },
+  'so_L91': { ...SovietLeader, morale: 9, leadershipModifier: -1, selfRally: true, src: './graf/ruL61.gif' },
+};
+
+// ---------------------------------------------------------------------------
+// Сценарий
+// ---------------------------------------------------------------------------
+const scenario = [
+  { templateId: 'ge_467', id: 'unit_01', hex: { col: 3, row: 2 } },
+  { templateId: 'ge_467', id: 'unit_02', hex: { col: 5, row: 2 } },
+  { templateId: 'ge_467', id: 'unit_03', hex: { col: 5, row: 2 } },
+  { templateId: 'ge_467', id: 'unit_04', hex: { col: 5, row: 2 } },
+  { templateId: 'ge_L91', id: 'unit_05', hex: { col: 6, row: 3 } },
+  { templateId: 'ge_467', id: 'unit_06', hex: { col: 6, row: 3 } },
+  { templateId: 'so_628', id: 'unit_11', hex: { col: 5, row: 6 } },
+  { templateId: 'so_628', id: 'unit_12', hex: { col: 5, row: 5 } },
+
+  // тест FG ряд 1: squad — leader — squad (соседние гексы)
+  { templateId: 'so_628', id: 'fg_r1_a', hex: { col: 1, row: 7 } },
+  { templateId: 'so_L91', id: 'fg_r1_b', hex: { col: 2, row: 7 } },
+  { templateId: 'so_628', id: 'fg_r1_c', hex: { col: 3, row: 7 } },
+
+  // тест FG ряд 2: (sq+sq+L) — (sq+L) — sq
+  { templateId: 'so_628', id: 'fg_r2_a1', hex: { col: 5, row: 7 } },
+  { templateId: 'so_628', id: 'fg_r2_a2', hex: { col: 5, row: 7 } },
+  { templateId: 'so_L91', id: 'fg_r2_a3', hex: { col: 5, row: 7 } },
+
+  { templateId: 'so_628', id: 'fg_r2_b1', hex: { col: 6, row: 7 } },
+  { templateId: 'so_L91', id: 'fg_r2_b2', hex: { col: 6, row: 7 } },
+
+  { templateId: 'so_628', id: 'fg_r2_c',  hex: { col: 7, row: 7 } },
+]
+
+function loadImage(src) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload  = () => resolve(img);
+    img.onerror = () => reject(new Error(`Failed to load image: ${src}`));
+    img.src = src;
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Создание одного юнита
+// ---------------------------------------------------------------------------
+function createUnit(data, layer) {
+
+  const w = data.image.width;
+  const h = data.image.height;
+
+  // группа = картинка + индикатор moved
+  const group = new Konva.Group({ x: data.x, y: data.y });
+  const image = new Konva.Image({ image: data.image, x: 0, y: 0 });
+  
+  const movedRect = new Konva.Rect({
+    x: 0, y: h - 8,
+    width: w, height: 8,
+    fill: 'red',
+    visible: false,
+    name: 'movedRect',
+  });
+
+  const movedText = new Konva.Text({
+    x: 0, y: h - 8,
+    width: w, height: 8,
+    text: 'moved', fill: 'white', fontSize: 7,
+    align: 'center', verticalAlign: 'middle',
+    visible: false,
+    name: 'movedText',
+  });
+
+  const activeRect = new Konva.Rect({
+    x: 0, y: h - 8,
+    width: w, height: 8,
+    fill: 'goldenrod',
+    visible: false,
+    name: 'activeRect',
+  });
+
+  const activeText = new Konva.Text({
+    x: 0, y: h - 8,
+    width: w, height: 8,
+    text: 'active', fill: 'white', fontSize: 7,
+    align: 'center', verticalAlign: 'middle',
+    visible: false,
+    name: 'activeText',
+  });
+
+  const selectRect = new Konva.Rect({
+  x: 0, y: 0,
+  width: w, height: h,
+  stroke: 'red',
+  strokeWidth: 1,
+  visible: false,
+  name: 'selectRect',
+  listening: false,
+});
+
+const addToMovementGroupRect = new Konva.Rect({
+    x: 0, y: 0,
+  width: w, height: h,
+  stroke: 'red',
+  strokeWidth: 1,
+  visible: false,
+  name: 'addToMovementGroupRect',
+  listening: false,
+});
+
+const addToFireGroupRect = new Konva.Rect({
+      x: 0, y: 0,
+  width: w, height: h,
+  stroke: 'red',
+  strokeWidth: 1,
+  visible: false,
+  name: 'addToFireGroupRect',
+  listening: false,
+});
+
+const cxText = new Konva.Text({
+    x: w - 12, y: 1,
+    text: 'CX', fill: 'red', fontSize: 8, fontStyle: 'bold',
+    visible: false,
+    name: 'cxText',
+    listening: false,
+});
+
+    group.add(image, movedRect, movedText, activeRect, activeText, selectRect, addToMovementGroupRect, addToFireGroupRect, cxText);
+    
+    const unit = { ...data, node: group };
+
+    group.setAttr('unitId', unit.id);
+    image.setAttr('unitId', unit.id);   // клики попадают на image — нужен и тут
+    movedRect.listening(false);          // декоративные — клики не ловят
+    movedText.listening(false);
+    activeRect.listening(false);
+    activeText.listening(false);
+    selectRect.listening(false);
+      addToMovementGroupRect.listening(false);
+      addToFireGroupRect.listening(false);
+
+
+    State.addUnit(unit);
+    layer.add(group);
+    return unit;
+
+}
+
+// ---------------------------------------------------------------------------
+// Создаём и загружаем все юниты сценария
+// ---------------------------------------------------------------------------
+export async function createAndLoadUnits(layer) {
+    for (const { templateId, hex, id } of scenario) {
+
+        const template = { ...TEMPLATES[templateId], id, hex, path: [{ hex, isRoad: Rules._isRoadHex(hex) }] };
+        const image       = await loadImage(template.src);
+        const { x, y }    = hexToPixel(hex.col, hex.row);
+        const cx          = x - image.width  / 2;
+        const cy          = y - image.height / 2;
+        createUnit({ ...template, image, x: cx, y: cy }, layer);
+    }
+}

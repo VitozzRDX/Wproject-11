@@ -1,4 +1,10 @@
-import * as interpreter from "/interpreter.js"; 
+import * as interpreter from "/interpreter.js";
+import * as unitloading from "/unitloading.js";
+import { PhaseManager } from './phase_manager.js';
+import * as renderer from './renderer.js';
+import { initPositioning } from './positioning.js';
+import { RendererUI } from './rendererUI.js';
+import { UIState } from './uiState.js';
 
 const stage = new Konva.Stage({
     container: 'container',
@@ -33,14 +39,39 @@ async function load_and_draw_background() {
     backgroundLayer.batchDraw()
 }
 
+async function load_and_draw_units() {
+    
+    const unitLayer = new Konva.Layer();   
+    await unitloading.createAndLoadUnits(unitLayer);
+    stage.add(unitLayer);
+    unitLayer.batchDraw();
+
+}
+
 async function init() {
 
     await load_and_draw_background();
-      
+    await load_and_draw_units();
+    PhaseManager.setPhase('german movement phase');
+
     stage.on('click', function (e) {
 
         interpreter.interpretEvent(e);  // handle - interpretEvent
-
+        
     });
+
+    window.addEventListener('keydown', interpreter.interpretKeyEvent);
+
+    // Сначала Renderer подписывается на State
+    renderer.initRenderer();
+    // Потом Positioning — он сразу пройдёт по гексам и расставит юниты,
+    // Renderer уже услышит pos-события и анимирует
+    initPositioning();
+
+    // UI слой для кнопок
+    const uiLayer = new Konva.Layer();
+    stage.add(uiLayer);
+    UIState.addButton('NextPhase', { x: 10, y: 10, label: 'NextPhase' });
+    RendererUI.init(uiLayer);
 }
 init();

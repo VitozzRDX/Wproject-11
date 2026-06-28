@@ -1,0 +1,7 @@
+node_modules/
+.vscode/
+.idea/
+*.log
+coverage/
+.DS_Store
+.instructions.md
