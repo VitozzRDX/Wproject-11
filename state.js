@@ -9,6 +9,7 @@ export const State = {
     splitted_group: [],            // оставшиеся "в ожидании" при дроблении
     moved_movement_group: null,    // последний реально двинувшийся стек
     pendingMove: null,             // отложенный мув (Woods-Road: ждём UseWoods/UseRoad)
+    fired_from_on_target_in_hex: {},   // { shooterHex: { targetId: targetHexAtFireTime } } — правило 3.3.3
 
     // массив подписчиков (Positioning, Renderer и т.д.)
     subscribers: [],

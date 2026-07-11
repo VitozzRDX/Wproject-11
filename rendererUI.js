@@ -1,18 +1,32 @@
 import { UIState } from './uiState.js';
 
 let uiLayer;
+const losLines = [];
 
 export const RendererUI = {
     init(layer) {
         uiLayer = layer;
 
-        UIState.subscribe((action, label, def) => {
-            if (action === 'add')    RendererUI.drawButton(def);
-            if (action === 'remove') RendererUI.removeButton(label);
+        UIState.subscribe((action, label, data) => {
+            if (action === 'add')      RendererUI.drawButton(data);
+            if (action === 'remove')   RendererUI.removeButton(label);
+            if (action === 'flashLOS') RendererUI.drawLOSLine(data.from, data.to);
         });
 
         // первичная отрисовка уже добавленных кнопок
         Object.values(UIState.buttons).forEach(def => RendererUI.drawButton(def));
+    },
+
+    drawLOSLine(from, to) {
+        const line = new Konva.Line({
+            points: [from.x, from.y, to.x, to.y],
+            stroke: 'red',
+            strokeWidth: 1,
+            listening: false,
+        });
+        uiLayer.add(line);
+        losLines.push(line);
+        uiLayer.batchDraw();
     },
 
     drawButton({ x, y, label }) {

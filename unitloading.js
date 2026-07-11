@@ -9,7 +9,8 @@ const Unit             = { state: 'ready' };
 const Infantry         = { ...Unit, hasStartedMoving: false, movementCompleted: false,
                                     leaderBonus: 0, roadBonus: 1, usedWoodsRoad: false,
                                     broken: false, pinned: false, wounded: false, exhausted: false,
-                                    doubleTime: false, assaultMovement: false };
+                                    doubleTime: false, assaultMovement: false,
+                                    mf_spent_in_current_hex: 0 };
 const Squad            = { ...Infantry, type: 'squad', mf: 4, leaderBonus: 2 };
 const Leader           = { ...Infantry, type: 'leader', mf: 6, quality: 'Elite' };
 const GermanSquad_1st  = { ...Squad,  nation: 'german', quality: '1stLine', selfRally: true  };
@@ -21,10 +22,13 @@ const SovietLeader     = { ...Leader, nation: 'soviet' };
 // Шаблоны — только уникальные цифры
 // ---------------------------------------------------------------------------
 const TEMPLATES = {
-  'ge_467': { ...GermanSquad_1st, firepower: 4, range: 6, morale: 7, src: './graf/ge467S.gif', brokenSrc: './graf/geh7b.gif' },
-  'so_628': { ...SovietSquad_Elite, firepower: 6, range: 2, morale: 8, src: './graf/ru628S.gif' },
-  'ge_L91': { ...GermanLeader, morale: 9, leadershipModifier: -1, selfRally: true, src: './graf/geL91.gif' },
-  'so_L91': { ...SovietLeader, morale: 9, leadershipModifier: -1, selfRally: true, src: './graf/ruL61.gif' },
+  'ge_467': { ...GermanSquad_1st, firepower: 4, range: 6, morale: 7, brokenMorale: 7, src: './graf/ge467S.gif', brokenSrc: './graf/geh7b.gif', halfSquad: 'ge_247' },
+  'ge_247': { ...GermanSquad_1st, firepower: 2, range: 4, morale: 7, brokenMorale: 7, size: 'halfSquad', src: './graf/ge247H.gif', brokenSrc: './graf/geh6b.gif' },
+  'so_628': { ...SovietSquad_Elite, firepower: 6, range: 2, morale: 8, brokenMorale: 8, src: './graf/ru628S.gif', halfSquad: 'so_328' },
+  'so_328': { ...SovietSquad_Elite, firepower: 3, range: 2, morale: 8, brokenMorale: 8, size: 'halfSquad', src: './graf/ru328H.gif' },
+  'ge_L91': { ...GermanLeader, morale: 9, brokenMorale: 9, leadershipModifier: -1, selfRally: true, src: './graf/geL91.gif', brokenSrc: './graf/geL91b.gif' },
+  'ge_L81': { ...GermanLeader, morale: 8, brokenMorale: 8, leadershipModifier: -1, selfRally: true, src: './graf/geL81.gif', brokenSrc: './graf/geL81b.gif' },
+  'so_L61': { ...SovietLeader, morale: 6, brokenMorale: 6, leadershipModifier: -1, selfRally: true, src: './graf/ruL61.gif' },
 };
 
 // ---------------------------------------------------------------------------
@@ -35,6 +39,8 @@ const scenario = [
   { templateId: 'ge_467', id: 'unit_02', hex: { col: 5, row: 2 } },
   { templateId: 'ge_467', id: 'unit_03', hex: { col: 5, row: 2 } },
   { templateId: 'ge_467', id: 'unit_04', hex: { col: 5, row: 2 } },
+  { templateId: 'ge_L81', id: 'unit_L81', hex: { col: 5, row: 2 } },
+  { templateId: 'ge_L91', id: 'unit_L91', hex: { col: 5, row: 2 } },
   { templateId: 'ge_L91', id: 'unit_05', hex: { col: 6, row: 3 } },
   { templateId: 'ge_467', id: 'unit_06', hex: { col: 6, row: 3 } },
   { templateId: 'so_628', id: 'unit_11', hex: { col: 5, row: 6 } },
@@ -42,16 +48,16 @@ const scenario = [
 
   // тест FG ряд 1: squad — leader — squad (соседние гексы)
   { templateId: 'so_628', id: 'fg_r1_a', hex: { col: 1, row: 7 } },
-  { templateId: 'so_L91', id: 'fg_r1_b', hex: { col: 2, row: 7 } },
+  { templateId: 'so_L61', id: 'fg_r1_b', hex: { col: 2, row: 7 } },
   { templateId: 'so_628', id: 'fg_r1_c', hex: { col: 3, row: 7 } },
 
   // тест FG ряд 2: (sq+sq+L) — (sq+L) — sq
   { templateId: 'so_628', id: 'fg_r2_a1', hex: { col: 5, row: 7 } },
   { templateId: 'so_628', id: 'fg_r2_a2', hex: { col: 5, row: 7 } },
-  { templateId: 'so_L91', id: 'fg_r2_a3', hex: { col: 5, row: 7 } },
+  { templateId: 'so_L61', id: 'fg_r2_a3', hex: { col: 5, row: 7 } },
 
   { templateId: 'so_628', id: 'fg_r2_b1', hex: { col: 6, row: 7 } },
-  { templateId: 'so_L91', id: 'fg_r2_b2', hex: { col: 6, row: 7 } },
+  { templateId: 'so_L61', id: 'fg_r2_b2', hex: { col: 6, row: 7 } },
 
   { templateId: 'so_628', id: 'fg_r2_c',  hex: { col: 7, row: 7 } },
 ]
@@ -149,7 +155,24 @@ const cxText = new Konva.Text({
     listening: false,
 });
 
-    group.add(image, movedRect, movedText, activeRect, activeText, selectRect, addToMovementGroupRect, addToFireGroupRect, cxText);
+const pinBg = new Konva.Rect({
+    x: 0, y: 0,
+    width: 18, height: 10,
+    fill: 'white',
+    visible: false,
+    name: 'pinBg',
+    listening: false,
+});
+
+const pinText = new Konva.Text({
+    x: 1, y: 1,
+    text: 'pin', fill: 'red', fontSize: 8, fontStyle: 'bold',
+    visible: false,
+    name: 'pinText',
+    listening: false,
+});
+
+    group.add(image, movedRect, movedText, activeRect, activeText, selectRect, addToMovementGroupRect, addToFireGroupRect, cxText, pinBg, pinText);
     
     const unit = { ...data, node: group };
 
@@ -166,6 +189,12 @@ const cxText = new Konva.Text({
 
     State.addUnit(unit);
     layer.add(group);
+
+    // предзагрузка broken-графики
+    if (data.brokenSrc) {
+        loadImage(data.brokenSrc).then(img => { unit.brokenImage = img; });
+    }
+
     return unit;
 
 }
@@ -182,5 +211,24 @@ export async function createAndLoadUnits(layer) {
         const cx          = x - image.width  / 2;
         const cy          = y - image.height / 2;
         createUnit({ ...template, image, x: cx, y: cy }, layer);
+
+        // предзагрузка half-squad картинок (для мгновенной замены)
+        const hsId = TEMPLATES[templateId].halfSquad;
+        if (hsId) {
+            const hs = TEMPLATES[hsId];
+            if (hs.src) loadImage(hs.src);
+            if (hs.brokenSrc) loadImage(hs.brokenSrc);
+        }
     }
+}
+
+// Создать юнит из шаблона в указанном гексе — для замены на HS и т.п.
+export async function spawn_unit(templateId, id, hex, layer) {
+    const template = { ...TEMPLATES[templateId], id, hex,
+                       path: [{ hex, isRoad: Rules._isRoadHex(hex) }] };
+    const image    = await loadImage(template.src);
+    const { x, y } = hexToPixel(hex.col, hex.row);
+    const cx       = x - image.width / 2;
+    const cy       = y - image.height / 2;
+    return createUnit({ ...template, image, x: cx, y: cy }, layer);
 }

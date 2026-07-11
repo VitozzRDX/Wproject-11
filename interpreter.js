@@ -55,6 +55,12 @@ const RULES = [
     },
     {
         requiresAny: [
+            { isButton: ctx => ctx.buttonLabel === 'PlaceSmoke' }
+        ],
+        name: 'PlaceSmoke'
+    },
+    {
+        requiresAny: [
             { isButton: ctx => ctx.buttonLabel === 'UseWoods' }
         ],
         name: 'UseWoods'
@@ -73,17 +79,16 @@ const RULES = [
                 leftClick:       ctx => ctx.button !== 2,
                 hasUnit:   ctx => ctx.unitId !== undefined,
                 clickedSideIsAttacker: ctx => State.units[ctx.unitId].nation === PhaseManager.getActiveSide(),
-                movingGroupIsEmpty: () => {
-                    return State.movementGroup.length === 0; }
+                movingGroupIsEmpty: () => State.movementGroup.length === 0,
+                fireGroupIsEmpty:   () => State.fireGroup.length === 0,
             },
             {
-                //shiftClick:       ctx => ctx.button !== 2 && ctx.shiftKey,
                 shift :       ctx => ctx.shiftKey,
                 leftClick:       ctx => ctx.button !== 2,
                 hasUnit:   ctx => ctx.unitId !== undefined,
                 clickedSideIsAttacker: ctx => State.units[ctx.unitId].nation === PhaseManager.getActiveSide(),
-                movingGroupIsNotEmpty: () => {
-                    return State.movementGroup.length > 0; }
+                movingGroupIsNotEmpty: () => State.movementGroup.length > 0,
+                fireGroupIsEmpty:      () => State.fireGroup.length === 0,
             }
         ],
         name:'addToMovingGroup'

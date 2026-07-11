@@ -5,6 +5,8 @@ import * as renderer from './renderer.js';
 import { initPositioning } from './positioning.js';
 import { RendererUI } from './rendererUI.js';
 import { UIState } from './uiState.js';
+import { runFireSimulation } from './fireSimulation.js';
+import { runWoundSimulation } from './woundSimulation.js';
 
 const stage = new Konva.Stage({
     container: 'container',
@@ -73,5 +75,8 @@ async function init() {
     stage.add(uiLayer);
     UIState.addButton('NextPhase', { x: 10, y: 10, label: 'NextPhase' });
     RendererUI.init(uiLayer);
+
+    runFireSimulation();
+    runWoundSimulation();
 }
 init();

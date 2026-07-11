@@ -16,4 +16,8 @@ export const UIState = {
     subscribe(handler) {
         this.subscribers.push(handler);
     },
+
+    flashLOS(from, to) {
+        this.subscribers.forEach(sub => sub('flashLOS', null, { from, to }));
+    },
 }
