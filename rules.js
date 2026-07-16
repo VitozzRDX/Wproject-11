@@ -1,5 +1,6 @@
 import { hexDistance, hexLabel, hexToPixel, pixelToHex } from './hexUtils.js';
 import { hexMap } from './hexmap.js';
+import { checkLOSCrossings } from './terrainLOS.js';
 
 // ===========================================================================
 // IFT (Infantry Fire Table)
@@ -70,10 +71,24 @@ function calcTEM(hex) {
 function calcFirepower(unit, targetHex) {
     if (unit.type === 'leader') return 0;   // лидер сам по себе не стреляет
     const dist = hexDistance(unit.hex, targetHex);
-    const fp   = unit.pinned ? unit.firepower / 2 : unit.firepower;
+    let fp   = unit.pinned ? unit.firepower / 2 : unit.firepower;
     const rng  = unit.range;
+
+    // SFF (Subsequent First Fire): FirstFire counter → FP halved, только normal range
+    if (unit.firingStatus === 'FirstFire') {
+        if (dist > rng) return 0;
+        fp = fp / 2;
+    }
+
+    // FPF (Final Protective Fire): FinalFire counter → тоже halved
+    // (precondition dist ≤ 1 проверяется отдельно в _check_FPF_valid)
+    if (unit.firingStatus === 'FinalFire') {
+        fp = fp / 2;
+    }
+
     if (dist > rng * 2) return 0;
-    if (dist === 1)     return fp * 2;   // Point Blank Fire
+    if (dist === 0)     return fp * 3;   // Triple Point Blank Fire (same hex)
+    if (dist === 1)     return fp * 2;   // Point Blank Fire (adjacent)
     if (dist <= rng)    return fp;
     return fp / 2;                        // long range
 }
@@ -153,6 +168,16 @@ function checkHindrance(shooters, targetHex) {
 }
 
 function checkLOS(shooters, targetHex) {
+    // Pixel-based блокировка: лес и здания режут LOS
+    for (const shooter of shooters) {
+        const from = hexToPixel(shooter.hex.col, shooter.hex.row);
+        const to   = hexToPixel(targetHex.col, targetHex.row);
+        const crossings = checkLOSCrossings(from, to, [shooter.hex, targetHex]);
+        if (crossings.woods)     return false;
+        if (crossings.buildings) return false;
+        // TODO: hills — нужна elevation logic (сравнение высот)
+    }
+    // Hindrance-порог по-прежнему hex-based (orchard/brush)
     return checkHindrance(shooters, targetHex) < 6;
 }
 
@@ -203,30 +228,58 @@ function calcLeadershipDRM(firegroupUnits) {
 // ===========================================================================
 // Fire Effect + apply
 // ===========================================================================
+// Cowering: doubles на не-leader-directed атаке → сдвиг колонки IFT влево.
+// Inexperienced юнит в FG → сдвиг на 2 колонки вместо 1.
+// Возвращает новую колонку либо null если ушли ниже минимальной (промах).
+function _applyCowering(units, col, red, white) {
+    if (units.some(u => u.type === 'leader')) return col;   // leader-directed → cowering negated
+    const inexperienced = units.some(u => u.quality === 'Inexperienced');
+    const shift = inexperienced ? 2 : 1;
+    const currentIdx = IFT_COLUMNS.indexOf(col);
+    const newIdx = currentIdx - shift;
+    console.log(`[cowering] doubles ${red}+${white} → shift ${shift} col left (${col} → ${IFT_COLUMNS[newIdx] ?? 'below'})`);
+    if (newIdx < 0) {
+        console.log(`[cowering] ниже минимальной колонки → без эффекта`);
+        return null;
+    }
+    return IFT_COLUMNS[newIdx];
+}
+
+function _rollD6_() {
+    if (rollQueue) return rollQueue.shift();
+    return Math.floor(Math.random()*6) + 1;
+}
+
 function calcFireEffect(units, targetHex, drm = 0) {
-    const fp  = calcTotalFirepower(units, targetHex);
-    const col = getIFTColumn(fp);
+    const fp    = calcTotalFirepower(units, targetHex);
+    let col     = getIFTColumn(fp);
+    const red   = _rollD6_();
+    const white = _rollD6_();
+    const dr    = red + white;
+
+    if (red === white) {
+        const newCol = _applyCowering(units, col, red, white);
+        if (newCol === null) return false;
+        col = newCol;
+    }
+
     const arr = IFT[col];
-    const dr  = roll2d6();
-    // rawIdx = бросок + модификатор. Может уйти ниже 0 при большом отрицательном DRM
-    // (много бонусов, например FFNAM+FFMO+leadership). По ASL это лучший результат
-    // на колонке — клампим к arr[0].
+    // rawIdx может уйти ниже 0 при большом отрицательном DRM — клампим к arr[0].
     const rawIdx = dr + drm;
     const idx = Math.max(0, rawIdx);
-    console.log(`[calcFireEffect] FP=${fp}, col=${col}, DR=${dr}, DRM=${drm}, idx=${idx}`);
-    // idx >= длины массива → промах (слишком высокий финальный бросок)
+    console.log(`[calcFireEffect] FP=${fp}, col=${col}, DR=${dr} (${red}+${white}), DRM=${drm}, idx=${idx}`);
     if (idx >= arr.length) {
         console.log(`[calcFireEffect] промах (idx ${idx} >= length ${arr.length})`);
-        return false;
+        return { effect: false, baseDr: dr };
     }
     console.log(`[calcFireEffect] результат:`, arr[idx]);
-    return arr[idx];
+    return { effect: arr[idx], baseDr: dr };
 }
 
 // Обработка MC для группы целей.
 // Лидеры проверяются первыми (лучший по морали → худший), каждый использует
 // накопленный лидер-DRM от прошедших unharmed. Non-leaders — с полным DRM.
-function _processMC(targets, k, result) {
+function _processMC(targets, k, result, fixedDr = null) {
     // Сортировка лидеров по эффективной морали (broken → brokenMorale)
     const effMorale = u => u.broken ? u.brokenMorale : u.morale;
     const leaders    = targets.filter(u => u.type === 'leader').sort((a,b) => effMorale(b) - effMorale(a));
@@ -239,7 +292,8 @@ function _processMC(targets, k, result) {
         const inProgress = result[u.id];
         if (inProgress === 'eliminated') return null;
         const morale  = effMorale(u);
-        const baseDr  = roll2d6();
+        // fixedDr — если задан, используется вместо ролла (например для FPF NMC)
+        const baseDr  = fixedDr ?? roll2d6();
         const finalDr = baseDr + k + drm;
 
         // Broken юниты тоже проходят MC. Провал → Casualty Reduction:
@@ -247,12 +301,12 @@ function _processMC(targets, k, result) {
         //   halfSquad/crew → eliminated
         //   squad → reduced (→ HS)
         if (u.broken) {
-            console.log(`[MC broken] ${u.id}: DR=${baseDr}, k=${k}, leaderDRM=${drm}, итог=${finalDr}, brokenMorale=${morale}`);
-            if (finalDr > morale) {
-                if (u.type === 'leader')                          return _woundLeader(u);
-                if (u.size === 'halfSquad' || u.size === 'crew')  return 'eliminated';
-                return 'reduced';
+            if (baseDr === 12) {
+                console.log(`[MC broken original 12] ${u.id} → eliminated`);
+                return 'eliminated';
             }
+            console.log(`[MC broken] ${u.id}: DR=${baseDr}, k=${k}, leaderDRM=${drm}, итог=${finalDr}, brokenMorale=${morale} → ${finalDr > morale ? 'CR' : 'ok'}`);
+            if (finalDr > morale) return _casualtyReduction(u);
             return 'ok';
         }
 
@@ -260,7 +314,18 @@ function _processMC(targets, k, result) {
             finalDr > morale ? 'broken' :
             finalDr === morale ? 'pinned' : 'ok'
         }`);
-        if (finalDr > morale)                     return 'broken';
+        if (finalDr > morale) {
+            // NMC-fail: broken + DM, снимаем Pin и CX
+            _placeDM(u);
+            u.pinned = false;
+            u.exhausted = false;
+            if (baseDr === 12) {
+                console.log(`[MC original 12] ${u.id} → CR в дополнение к breaking`);
+                u.broken = true;   // мутация чтобы _replace_unit унаследовал broken на HS
+                return _casualtyReduction(u);
+            }
+            return 'broken';
+        }
         if (finalDr === morale && !u.pinned)      return 'pinned';
         return 'ok';
     };
@@ -283,6 +348,27 @@ function _processMC(targets, k, result) {
     });
 }
 
+// Desperation Morale — маркер на юните. Ставится при КИА-survive без broken.
+// Мутирует u.desperationMorale = true.
+function _placeDM(u) {
+    u.desperationMorale = true;
+    console.log(`[DM] ${u.id} → desperation morale placed`);
+}
+
+// Casualty Reduction — единая точка для K/, broken-MC-fail, KIA-survivor-broken.
+//   leader → wound severity (_woundLeader)
+//   halfSquad/crew → eliminated (уже уменьшенный дальше не редуцируется)
+//   squad → reduced (→ HS)
+function _casualtyReduction(u) {
+    if (u.type === 'leader') return _woundLeader(u);
+    if (u.size === 'halfSquad' || u.size === 'crew') {
+        console.log(`[casualty reduction] ${u.id} → eliminated`);
+        return 'eliminated';
+    }
+    console.log(`[casualty reduction] ${u.id} → reduced`);
+    return 'reduced';
+}
+
 // Ранение лидера (SMC casualty reduction).
 // Wound severity dr: 1-4 = light wound (мораль-1, DRM+1, флаг wounded),
 //                    5-6 = eliminated. Уже раненный получает +1 к severity dr.
@@ -294,7 +380,8 @@ function _woundLeader(u) {
     u.wounded = true;
     u.morale -= 1;
     u.leadershipModifier = (u.leadershipModifier ?? 0) + 1;
-    console.log(`[wound light] ${u.id}: morale→${u.morale}, DRM→${u.leadershipModifier}`);
+    u.mf = Math.min(u.mf, 3);   // wounded SMC has 3 MF
+    console.log(`[wound light] ${u.id}: morale→${u.morale}, DRM→${u.leadershipModifier}, mf→${u.mf}`);
     return 'wounded';
 }
 
@@ -403,8 +490,15 @@ function applyFireEffect(effect, targets) {
                 result[u.id] = 'eliminated';
             });
             shuffled.slice(k).forEach(u => {
-                console.log(`[KIA] ${u.id} → broken (выжил)`);
-                result[u.id] = 'broken';
+                if (u.broken) {
+                    // выживший, но уже сломан → Casualty Reduction
+                    result[u.id] = _casualtyReduction(u);
+                    console.log(`[KIA survivor already broken] ${u.id} → CR: ${result[u.id]}`);
+                } else {
+                    console.log(`[KIA survivor] ${u.id} → broken + DM`);
+                    result[u.id] = 'broken';
+                    _placeDM(u);
+                }
             });
             break;
         }
@@ -413,16 +507,8 @@ function applyFireEffect(effect, targets) {
             const victim = targets[idx];
             const others = targets.filter((_, i) => i !== idx);
 
-            if (victim.type === 'leader') {
-                // единая логика ранения (в K/ и в broken-MC-fail)
-                result[victim.id] = _woundLeader(victim);
-            } else if (victim.size === 'halfSquad' || victim.size === 'crew') {
-                console.log(`[K/ casualty] ${victim.id} → eliminated`);
-                result[victim.id] = 'eliminated';
-            } else {
-                console.log(`[K/ casualty] ${victim.id} → reduced`);
-                result[victim.id] = 'reduced';
-            }
+            result[victim.id] = _casualtyReduction(victim);
+            console.log(`[K/ casualty] ${victim.id} → ${result[victim.id]}`);
             _processMC(others, k, result);
             break;
         }
@@ -431,7 +517,62 @@ function applyFireEffect(effect, targets) {
     return result;
 }
 
-function defensiveFF(firegroupUnits, targetHex, hexUnits) {
+// KEU = unconcealed enemy unit к которому у нас есть LOS.
+// Пока LOS всегда true (кроме hindrance≥6), concealment не реализовано.
+// Когда добавятся геометрия/сокрытие — семантика будет корректна автоматически.
+function _closest_enemy_distance(shooter, units) {
+    let min = Infinity;
+    for (const u of Object.values(units)) {
+        if (u.nation === shooter.nation) continue;
+        if (!checkLOS([shooter], u.hex)) continue;   // нет LOS → не KEU
+        // TODO: concealed check когда появится (u.concealed)
+        const d = hexDistance(shooter.hex, u.hex);
+        if (d < min) min = d;
+    }
+    return min;
+}
+
+// FPF-precondition: FinalFire-стрелок может атаковать только adjacent или same hex
+function _check_FPF_valid(firegroupUnits, targetHex) {
+    for (const u of firegroupUnits) {
+        if (u.firingStatus !== 'FinalFire') continue;
+        const dist = hexDistance(u.hex, targetHex);
+        if (dist > 1) {
+            console.log(`[FPF blocked] ${u.id}: dist ${dist} > 1 (must be adjacent/same hex)`);
+            return false;
+        }
+    }
+    return true;
+}
+
+// SFF-precondition: любой SFF-стрелок в FG обязан быть в normal range И не дальше ближайшего KEU
+function _check_SFF_valid(firegroupUnits, targetHex, units) {
+    for (const u of firegroupUnits) {
+        if (u.firingStatus !== 'FirstFire') continue;   // не SFF — пропускаем
+        const dist = hexDistance(u.hex, targetHex);
+        if (dist > u.range) {
+            console.log(`[SFF blocked] ${u.id}: dist ${dist} > normal range ${u.range}`);
+            return false;
+        }
+        const closest = _closest_enemy_distance(u, units);
+        if (dist > closest) {
+            console.log(`[SFF blocked] ${u.id}: dist ${dist} > closest KEU distance ${closest}`);
+            return false;
+        }
+    }
+    return true;
+}
+
+function defensiveFF(firegroupUnits, targetHex, hexUnits, units) {
+    if (!_check_SFF_valid(firegroupUnits, targetHex, units)) {
+        console.log('[defensiveFF] SFF constraint violated — атака отменена');
+        return null;
+    }
+    if (!_check_FPF_valid(firegroupUnits, targetHex)) {
+        console.log('[defensiveFF] FPF constraint violated — атака отменена');
+        return null;
+    }
+
     const los = checkLOS(firegroupUnits, targetHex);
     console.log(`[defensiveFF] LOS=${los}`);
     if (!los) {
@@ -451,8 +592,21 @@ function defensiveFF(firegroupUnits, targetHex, hexUnits) {
 
     console.log(`[defensiveFF] TEM=${tem}, HINDRANCE=${hindrance}, FFNAM=${ffnam}, FFMO=${ffmo}, LEADER=${leadershipDRM}, totalDRM=${totalDRM}`);
 
-    const effect  = calcFireEffect(firegroupUnits, targetHex, totalDRM);
+    const { effect, baseDr } = calcFireEffect(firegroupUnits, targetHex, totalDRM);
     const changes = applyFireEffect(effect, hexUnits);
+
+    // FPF Self-NMC: если FinalFire-стрелки в FG, они (+ directing leaders)
+    // проходят NMC с original DR + leadership DRM (k=0, только leader help).
+    const fpfShooters = firegroupUnits.filter(u => u.firingStatus === 'FinalFire');
+    if (fpfShooters.length > 0) {
+        const nmcSubjects = firegroupUnits.filter(u =>
+            u.firingStatus === 'FinalFire' || u.type === 'leader'
+        );
+        console.log(`[FPF NMC] subjects: ${nmcSubjects.map(u => u.id).join(',')}, fixedDr=${baseDr}`);
+        _processMC(nmcSubjects, 0, changes, baseDr);
+        _checkLeaderLoss(nmcSubjects, changes);
+    }
+
     return { changes };
 }
 
@@ -663,7 +817,7 @@ function calc_road_bonus_per_unit(mg, units, result, targetHex, overrideTerrain 
 
 export const Rules = {
     checkIfAddingToMovementGroupIsValid(unit, movementStackHex, activeSide, mg, units) {
-        if (unit.pinned) return false;
+        if (unit.pinned || unit.broken) return false;
 
         const isInSameHex = unit.hex.col === movementStackHex.col &&
                             unit.hex.row === movementStackHex.row;

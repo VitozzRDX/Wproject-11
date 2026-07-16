@@ -49,6 +49,28 @@ unit as a target for Defensive First Fire
 A combat result that eliminates a HS or crew or wounds a SMC.
 A squad is reduced to a HS (3.2.3).
 
+3.3.3 Subsequent First Fire (SFF)
+A DEFENDER Infantry unit already marked with a First Fire counter may Defensive
+First Fire again with its own FP and/or MG during that MPh provided that the
+target is not at a range greater than that to the closest Known Enemy Unit, nor
+outside the firer's normal range. A unit thus using Subsequent First Fire (SFF)
+has its FP halved. After the attack is resolved, flip the First Fire counter
+over to its Final Fire side.
+
+3.3.3 Final Protective Fire (FPF)
+FPF is an option available to a DEFENDER Infantry unit already marked with a
+Final Fire counter which wishes to fire at adjacent or same hex moving units
+during the MPh. FPF is treated as Subsequent First Fire (with the FP also
+doubled due to the effects of PBF) with an additional penalty; immediately
+after normally resolving the attack, the original IFT DR (modified only by
+applicable leadership DRM) is used as a NMC against the units using FPF
+(including any directing leader). Provided it does not break, there is no
+limit to the number of FPF attacks a unit may make, other than the number of
+moving units and the MF/MP they expend in the adjacent or the firer's hex.
+A unit using FPF must use all its FP and usable MG (or IFE) and may form a FG
+with units not using FPF, but only those units using FPF are affected by its
+adverse effects.
+
 3.2.3 Leader Loss Task Check (LLTC)
 If a leader breaks, all Good Order units with a lower current morale level
 stacked with him and not in CC must take a PTC after resolving the initial

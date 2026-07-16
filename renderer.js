@@ -99,6 +99,27 @@ export function initRenderer() {
             node.findOne('.pinText').visible(value);
         }
 
+        // DM (Desperation Morale) — центр каунтера
+        if (key === 'desperationMorale') {
+            node.findOne('.dmText').visible(value);
+        }
+
+        // wounded — белая полоска сверху: жирный "+" слева, "wound" по центру
+        if (key === 'wounded') {
+            node.findOne('.woundedRect').visible(value);
+            node.findOne('.woundedCross').visible(value);
+            node.findOne('.woundedText').visible(value);
+        }
+
+        // firing status:
+        //   FirstFire → белая полоска внизу с "first fire"
+        //   FinalFire → крупное центральное "FF"
+        if (key === 'firingStatus') {
+            node.findOne('.ffRect').visible(value === 'FirstFire');
+            node.findOne('.ffText').visible(value === 'FirstFire');
+            node.findOne('.ffBigText').visible(value === 'FinalFire');
+        }
+
         // broken — флип на broken-сторону
         if (key === 'broken' && value === true) {
             flipRendering(node, State.units[id]);

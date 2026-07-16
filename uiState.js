@@ -20,4 +20,8 @@ export const UIState = {
     flashLOS(from, to) {
         this.subscribers.forEach(sub => sub('flashLOS', null, { from, to }));
     },
+
+    flashHitPoints(points) {
+        this.subscribers.forEach(sub => sub('flashHitPoints', null, points));
+    },
 }

@@ -10,8 +10,9 @@ const Infantry         = { ...Unit, hasStartedMoving: false, movementCompleted: 
                                     leaderBonus: 0, roadBonus: 1, usedWoodsRoad: false,
                                     broken: false, pinned: false, wounded: false, exhausted: false,
                                     doubleTime: false, assaultMovement: false,
+                                    desperationMorale: false,
                                     mf_spent_in_current_hex: 0 };
-const Squad            = { ...Infantry, type: 'squad', mf: 4, leaderBonus: 2 };
+const Squad            = { ...Infantry, type: 'squad', mf: 4, leaderBonus: 2, firingStatus: ' ' };
 const Leader           = { ...Infantry, type: 'leader', mf: 6, quality: 'Elite' };
 const GermanSquad_1st  = { ...Squad,  nation: 'german', quality: '1stLine', selfRally: true  };
 const SovietSquad_Elite= { ...Squad,  nation: 'soviet', quality: 'Elite',   selfRally: true  };
@@ -24,11 +25,11 @@ const SovietLeader     = { ...Leader, nation: 'soviet' };
 const TEMPLATES = {
   'ge_467': { ...GermanSquad_1st, firepower: 4, range: 6, morale: 7, brokenMorale: 7, src: './graf/ge467S.gif', brokenSrc: './graf/geh7b.gif', halfSquad: 'ge_247' },
   'ge_247': { ...GermanSquad_1st, firepower: 2, range: 4, morale: 7, brokenMorale: 7, size: 'halfSquad', src: './graf/ge247H.gif', brokenSrc: './graf/geh6b.gif' },
-  'so_628': { ...SovietSquad_Elite, firepower: 6, range: 2, morale: 8, brokenMorale: 8, src: './graf/ru628S.gif', halfSquad: 'so_328' },
+  'so_628': { ...SovietSquad_Elite, firepower: 6, range: 2, morale: 8, brokenMorale: 8, src: './graf/ru628S.gif', brokenSrc: './graf/ruH8b.gif', halfSquad: 'so_328' },
   'so_328': { ...SovietSquad_Elite, firepower: 3, range: 2, morale: 8, brokenMorale: 8, size: 'halfSquad', src: './graf/ru328H.gif' },
   'ge_L91': { ...GermanLeader, morale: 9, brokenMorale: 9, leadershipModifier: -1, selfRally: true, src: './graf/geL91.gif', brokenSrc: './graf/geL91b.gif' },
   'ge_L81': { ...GermanLeader, morale: 8, brokenMorale: 8, leadershipModifier: -1, selfRally: true, src: './graf/geL81.gif', brokenSrc: './graf/geL81b.gif' },
-  'so_L61': { ...SovietLeader, morale: 6, brokenMorale: 6, leadershipModifier: -1, selfRally: true, src: './graf/ruL61.gif' },
+  'so_L61': { ...SovietLeader, morale: 6, brokenMorale: 6, leadershipModifier: -1, selfRally: true, src: './graf/ruL61.gif', brokenSrc: './graf/ruL61b.gif' },
 };
 
 // ---------------------------------------------------------------------------
@@ -43,6 +44,7 @@ const scenario = [
   { templateId: 'ge_L91', id: 'unit_L91', hex: { col: 5, row: 2 } },
   { templateId: 'ge_L91', id: 'unit_05', hex: { col: 6, row: 3 } },
   { templateId: 'ge_467', id: 'unit_06', hex: { col: 6, row: 3 } },
+  { templateId: 'ge_467', id: 'unit_N6', hex: { col: 13, row: 6 } },
   { templateId: 'so_628', id: 'unit_11', hex: { col: 5, row: 6 } },
   { templateId: 'so_628', id: 'unit_12', hex: { col: 5, row: 5 } },
 
@@ -60,6 +62,8 @@ const scenario = [
   { templateId: 'so_L61', id: 'fg_r2_b2', hex: { col: 6, row: 7 } },
 
   { templateId: 'so_628', id: 'fg_r2_c',  hex: { col: 7, row: 7 } },
+  { templateId: 'so_628', id: 'unit_J7',  hex: { col: 9, row: 7 } },
+  { templateId: 'so_628', id: 'unit_M11', hex: { col: 12, row: 11 } },
 ]
 
 function loadImage(src) {
@@ -172,7 +176,69 @@ const pinText = new Konva.Text({
     listening: false,
 });
 
-    group.add(image, movedRect, movedText, activeRect, activeText, selectRect, addToMovementGroupRect, addToFireGroupRect, cxText, pinBg, pinText);
+const dmText = new Konva.Text({
+    x: (w - 34) / 2, y: (h - 12) / 2 + 2,
+    width: 34, height: 8,
+    text: 'DM+4', fill: 'red', fontSize: 9, fontStyle: 'bold',
+    align: 'center', verticalAlign: 'middle',
+    visible: false,
+    name: 'dmText',
+    listening: false,
+});
+
+const woundedRect = new Konva.Rect({
+    x: 0, y: 0,
+    width: w, height: 8,
+    fill: 'white',
+    visible: false,
+    name: 'woundedRect',
+    listening: false,
+});
+const woundedCross = new Konva.Text({
+    x: 1, y: -2,
+    text: '+', fill: 'red', fontSize: 12, fontStyle: 'bold',
+    visible: false,
+    name: 'woundedCross',
+    listening: false,
+});
+const woundedText = new Konva.Text({
+    x: 0, y: 0,
+    width: w, height: 8,
+    text: 'wound', fill: 'red', fontSize: 7, fontStyle: 'bold',
+    align: 'center', verticalAlign: 'middle',
+    visible: false,
+    name: 'woundedText',
+    listening: false,
+});
+
+const ffRect = new Konva.Rect({
+    x: 0, y: h - 8,
+    width: w, height: 8,
+    fill: 'white',
+    visible: false,
+    name: 'ffRect',
+    listening: false,
+});
+const ffText = new Konva.Text({
+    x: 0, y: h - 8,
+    width: w, height: 8,
+    text: 'first fire', fill: 'red', fontSize: 7, fontStyle: 'bold',
+    align: 'center', verticalAlign: 'middle',
+    visible: false,
+    name: 'ffText',
+    listening: false,
+});
+const ffBigText = new Konva.Text({
+    x: 0, y: 0,
+    width: w, height: h,
+    text: 'FF', fill: 'red', fontSize: Math.floor(w * 0.7), fontStyle: 'bold',
+    align: 'center', verticalAlign: 'middle',
+    visible: false,
+    name: 'ffBigText',
+    listening: false,
+});
+
+    group.add(image, movedRect, movedText, activeRect, activeText, selectRect, addToMovementGroupRect, addToFireGroupRect, cxText, pinBg, pinText, dmText, woundedRect, woundedCross, woundedText, ffRect, ffText, ffBigText);
     
     const unit = { ...data, node: group };
 

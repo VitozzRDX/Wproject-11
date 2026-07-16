@@ -4,6 +4,7 @@ import { PhaseManager } from './phase_manager.js';
 import { pixelToHex, hexToPixel, hexLabel } from './hexUtils.js';
 import { UIState } from './uiState.js';
 import { spawn_unit } from './unitloading.js';
+import { lastHits } from './terrainLOS.js';
 import { flipReplaceUnit, raiseToTop } from './renderer.js';
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
@@ -107,11 +108,26 @@ const handlers = {
             return;
         }
 
-        _drawLOS(firegroupUnits, targetHex);
+        const result = Rules.defensiveFF(firegroupUnits, targetHex, hexUnits, State.units);
+        if (result === null) return;   // SFF constraint violated — LOS не рисуем
 
-        const { changes } = Rules.defensiveFF(firegroupUnits, targetHex, hexUnits);
-        await _apply_changes_for_targets(changes);
+        _drawLOS(firegroupUnits, targetHex);
+        UIState.flashHitPoints([...lastHits]);   // DEBUG — зелёные точки в местах пересечений
+
+        await _apply_changes_for_targets(result.changes);
         _recordFiredFrom(firegroupUnits, hexUnits);
+
+        // defender обновляет firing counter:
+        //   ' ' → FirstFire (первый выстрел этого MPh)
+        //   'FirstFire' → FinalFire (после SFF)
+        firegroupUnits.forEach(u => {
+            if (u.firingStatus === undefined) return;
+            if (u.firingStatus === 'FirstFire') {
+                State.setUnit(u.id, 'firingStatus', 'FinalFire');
+            } else if (u.firingStatus === ' ') {
+                State.setUnit(u.id, 'firingStatus', 'FirstFire');
+            }
+        });
 
         State.fireGroup.forEach(id => State.setUnit(id, 'inFireGroup', false));
         State.fireGroup = [];
@@ -235,16 +251,29 @@ function _remove_unit(unitId) {
     layer?.batchDraw();
 }
 
-// заменить юнит на новый (по templateId) в том же гексе — с флип-анимацией
+// заменить юнит на новый (по templateId) в том же гексе — с флип-анимацией.
+// Перед удалением капим статусы старого; после спавна применяем их к новому
+// (broken/DM/pinned/exhausted survivor должен сохраниться).
 function _replace_unit(oldId, newTemplateId, newId) {
-    const u = State.units[oldId];
-    if (!u) return;
-    const hex   = u.hex;
-    const layer = u.node.getLayer();
+    const old = State.units[oldId];
+    if (!old) return;
 
-    flipReplaceUnit(u.node, async () => {
+    const inherit = {
+        broken:            old.broken,
+        desperationMorale: old.desperationMorale,
+        pinned:            old.pinned,
+        exhausted:         old.exhausted,
+    };
+
+    const hex   = old.hex;
+    const layer = old.node.getLayer();
+
+    flipReplaceUnit(old.node, async () => {
         _remove_unit(oldId);
         const newUnit = await spawn_unit(newTemplateId, newId, hex, layer);
+        for (const [key, val] of Object.entries(inherit)) {
+            if (val) State.setUnit(newId, key, true);
+        }
         return newUnit.node;
     });
 }
@@ -272,6 +301,13 @@ async function _apply_changes_for_targets(changes) {
         await sleep(150);
 
         State.setUnit(id, state, true);
+        // Rules могли замутировать флаги — синкаем через State.setUnit чтобы Renderer их подхватил
+        if (u?.desperationMorale) State.setUnit(id, 'desperationMorale', true);
+        // NMC-fail сбрасывает Pin и CX — синкаем чтобы Renderer убрал маркеры
+        if (u && state === 'broken') {
+            State.setUnit(id, 'pinned',    u.pinned);
+            State.setUnit(id, 'exhausted', u.exhausted);
+        }
         if ((state === 'pinned' || state === 'broken') && State.movementGroup.includes(id)) {
             State.setUnit(id, 'inMovementGroup', false);
             State.movementGroup = State.movementGroup.filter(x => x !== id);

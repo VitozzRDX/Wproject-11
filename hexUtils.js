@@ -3,10 +3,10 @@
 // ---------------------------------------------------------------------------
 
 /** Outer radius (center → vertex), px */
- const R = 112 / 3;
+ export const R = 112 / 3;
 
 /** Half horizontal step, px */
- const RX = 37.35;
+ const RX = 37.30;
 
 /** Full hex height = vertical distance between adjacent row centers, px */
  const HEX_H = Math.sqrt(3) * R;
@@ -22,7 +22,10 @@
 // ---------------------------------------------------------------------------
 
 /** World-pixel X of hex A1 (column 0, row 1) center */
- const GRID_OFFSET_X = RX - COL_STEP / 2 - 5;
+ const GRID_OFFSET_X = 1.32;   // подкручиваем вручную под карту
+
+/** Квадратичный коэффициент разбега — накопительный сдвиг вправо при росте col */
+ const DRIFT_COEF = 0.005;   // подкручиваем: 0.01, 0.02, ...
 
 /** World-pixel Y of hex A1 (column 0, row 1) center */
  const GRID_OFFSET_Y = HEX_H / 2 - 2;
@@ -44,7 +47,14 @@ export const ROW_COUNT = Math.ceil(WORLD_H / HEX_H);
 
 
 export function pixelToHex(px, py) {
-  const col = Math.round((px - GRID_OFFSET_X) / COL_STEP);
+  // линейная оценка + итеративная коррекция под квадратичный дрифт
+  let col = Math.round((px - GRID_OFFSET_X) / COL_STEP);
+  for (let iter = 0; iter < 3; iter++) {
+    const gridX = GRID_OFFSET_X + col * COL_STEP + col * col * DRIFT_COEF;
+    const dCol = Math.round((px - gridX) / COL_STEP);
+    if (dCol === 0) break;
+    col += dCol;
+  }
   const clampedCol = Math.max(0, Math.min(COL_COUNT - 1, col));
   const yAdjusted = py - GRID_OFFSET_Y - (clampedCol % 2 === 1 ? ODD_OFFSET : 0);
   const row = Math.round(yAdjusted / HEX_H) + 1;
@@ -98,7 +108,7 @@ export function hexDistance(a, b) {
 }
 
 export function hexToPixel(col, row) {
-  const x = GRID_OFFSET_X + col * COL_STEP;
+  const x = GRID_OFFSET_X + col * COL_STEP + col * col * DRIFT_COEF;
   const y = GRID_OFFSET_Y + (row - 1) * HEX_H + (col % 2 === 1 ? ODD_OFFSET : 0);
   return { x, y };
 }

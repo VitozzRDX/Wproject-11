@@ -9,7 +9,10 @@ function createContext(e) {
     const buttonLabel = e.target.getParent()?.getAttr('buttonLabel'); // label кнопки UI (атрибут на группе)
     const button      = e.evt.button;                                 // кнопка мыши: 0=left, 2=right
     const shiftKey    = e.evt.shiftKey;                               // зажат ли шифт
-    const pos         = e.target.getStage().getPointerPosition();     // координаты клика
+    // мировые координаты клика (учитываем сдвиг stage от скроллинга WASD)
+    const stage       = e.target.getStage();
+    const raw         = stage.getPointerPosition();
+    const pos         = { x: raw.x - stage.x(), y: raw.y - stage.y() };
 
     return { unitId, buttonLabel, button, shiftKey, pos };
 }
