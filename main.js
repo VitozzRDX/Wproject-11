@@ -8,7 +8,7 @@ import { UIState } from './uiState.js';
 import { runFireSimulation } from './fireSimulation.js';
 import { runWoundSimulation } from './woundSimulation.js';
 import { initTerrainLOS } from './terrainLOS.js';
-import { hexToPixel, COL_COUNT, ROW_COUNT, R } from './hexUtils.js';
+import { hexToPixel, COL_COUNT, ROW_COUNT, R, hexLabel } from './hexUtils.js';
 
 const stage = new Konva.Stage({
     container: 'container',
@@ -27,7 +27,8 @@ function loadImage(src) {
 
 
 function draw_hex_grid(layer) {
-    for (let col = 0; col < COL_COUNT; col++) {
+    const labelsGroup = new Konva.Group({ listening: false });
+    for (let col = -COL_COUNT; col < COL_COUNT; col++) {
         for (let row = 1; row <= ROW_COUNT; row++) {
             const { x, y } = hexToPixel(col, row);
             layer.add(new Konva.RegularPolygon({
@@ -39,33 +40,71 @@ function draw_hex_grid(layer) {
                 rotation: 30,   // flat-top
                 listening: false,
             }));
+            const label = hexLabel(col, row);
+            const text = new Konva.Text({
+                text: label,
+                fontSize: 9,
+                fill: 'rgba(0,0,0,0.6)',
+                listening: false,
+            });
+            text.x(x - text.width() / 2);
+            text.y(y - R * 0.75);
+            labelsGroup.add(text);
         }
     }
+    layer.add(labelsGroup);
+    labelsGroup.cache();   // кешируем только лейблы
 }
 
 async function load_and_draw_background() {
     // Создаём новый слой для фона
     const backgroundLayer = new Konva.Layer();
 
-    // Загружаем изображения карт (доски стыкуются вертикально по BOARD_H=645)
-    const img = await loadImage('./graf/1.gif');
-    backgroundLayer.add(new Konva.Image({ image: img, x: 0, y: 0, id: 'map' }));
+    // Загружаем изображения карт (доски стыкуются вертикально по BOARD_H=645, горизонтально по 1800)
+    // 1-я доска: base + terrain (заменяет 1.gif)
+    const img1base = await loadImage('./graf/base_layer.png');
+    backgroundLayer.add(new Konva.Image({ image: img1base, x: 0, y: 0, id: 'map1_base' }));
+    const img1terrain = await loadImage('./graf/terrain_inside_1.png');
+    backgroundLayer.add(new Konva.Image({ image: img1terrain, x: 0, y: 0, id: 'map1_terrain' }));
 
-    const img2 = await loadImage('./graf/bdu.gif');
-    backgroundLayer.add(new Konva.Image({ image: img2, x: 0, y: 645, id: 'map2' }));
+    // Доска bdu слева от 1-й
+    const bduBase = await loadImage('./graf/bdu_base_layer.png');
+    backgroundLayer.add(new Konva.Image({ image: bduBase, x: -1800, y: 0, id: 'bdu_base' }));
+    const bduTerrain = await loadImage('./graf/bdu_terrain_inside.png');
+    backgroundLayer.add(new Konva.Image({ image: bduTerrain, x: -1800, y: 0, id: 'bdu_terrain' }));
 
-    // Оверлеи с контурами террейнов (прозрачные PNG)
-    const overlays = [
+
+    // Оверлеи контуров террейнов V-карты (x=0, y=0)
+    const overlaysV = [
         './graf/woods_outline.png',
         './graf/buildings_outline.png',
         './graf/hills_outline_1.png',
         './graf/orchard_outline_1.png',
         './graf/brush_outline.png',
     ];
-    for (const src of overlays) {
+    const groupV = new Konva.Group({ name: 'overlays-v' });
+    for (const src of overlaysV) {
         const overlayImg = await loadImage(src);
-        backgroundLayer.add(new Konva.Image({ image: overlayImg, x: 0, y: 0, listening: false }));
+        groupV.add(new Konva.Image({ image: overlayImg, x: 0, y: 0, listening: false }));
     }
+    groupV.visible(false);
+    backgroundLayer.add(groupV);
+
+    // Оверлеи контуров террейнов U-карты (x=-1800, y=0)
+    const overlaysU = [
+        './graf/bdu_woods_outline.png',
+        './graf/bdu_buildings_outline.png',
+        './graf/bdu_hills_outline.png',
+        './graf/bdu_orchard_outline.png',
+        './graf/bdu_brush_outline.png',
+    ];
+    const groupU = new Konva.Group({ name: 'overlays-u' });
+    for (const src of overlaysU) {
+        const overlayImg = await loadImage(src);
+        groupU.add(new Konva.Image({ image: overlayImg, x: -1800, y: 0, listening: false }));
+    }
+    groupU.visible(true);   // включаем U-контуры по умолчанию
+    backgroundLayer.add(groupU);
 
     draw_hex_grid(backgroundLayer);
 

@@ -573,6 +573,13 @@ function defensiveFF(firegroupUnits, targetHex, hexUnits, units) {
         return null;
     }
 
+    // Нет FP (например, только лидер в FG) — стрелять нечем
+    const totalFP = calcTotalFirepower(firegroupUnits, targetHex);
+    if (totalFP <= 0) {
+        console.log('[defensiveFF] total FP = 0 — стрелять нечем');
+        return null;
+    }
+
     const los = checkLOS(firegroupUnits, targetHex);
     console.log(`[defensiveFF] LOS=${los}`);
     if (!los) {

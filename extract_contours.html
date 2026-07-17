@@ -13,19 +13,37 @@
 <body>
 
 <h1>Contour extractor</h1>
-<p>Проходит по PNG-файлам, собирает пиксели с alpha &gt; 0, дампит JSON и скачивает <code>terrainPixels.json</code>.</p>
+<p>Проходит по PNG-файлам каждой карты, собирает пиксели с alpha &gt; 0 в <b>локальных</b> координатах,
+дампит вложенный JSON <code>terrainPixels.json</code>.</p>
 
 <button id="run">Extract</button>
 <div id="status"></div>
 <canvas id="c"></canvas>
 
 <script>
-const overlays = {
-    woods:     './graf/woods_outline.png',
-    buildings: './graf/buildings_outline.png',
-    hills:     './graf/hills_outline_1.png',
-    orchard:   './graf/orchard_outline_1.png',
-    brush:     './graf/brush_outline.png',
+// Каждая карта — свой набор PNG и своё смещение в мировых координатах.
+// Пиксели хранятся в ЛОКАЛЬНЫХ координатах, переставить карту = поменять xOffset/yOffset.
+const cards = {
+    v: {
+        xOffset: 0, yOffset: 0,
+        files: {
+            woods:     './graf/woods_outline.png',
+            buildings: './graf/buildings_outline.png',
+            hills:     './graf/hills_outline_1.png',
+            orchard:   './graf/orchard_outline_1.png',
+            brush:     './graf/brush_outline.png',
+        },
+    },
+    u: {
+        xOffset: -1800, yOffset: 0,
+        files: {
+            woods:     './graf/bdu_woods_outline.png',
+            buildings: './graf/bdu_buildings_outline.png',
+            hills:     './graf/bdu_hills_outline.png',
+            orchard:   './graf/bdu_orchard_outline.png',
+            brush:     './graf/bdu_brush_outline.png',
+        },
+    },
 };
 
 const status = document.getElementById('status');
@@ -55,19 +73,25 @@ async function extract(name, src) {
             if (alpha > 0) pixels.push([x, y]);
         }
     }
-    status.textContent += `${name}: ${pixels.length} pixels (${img.width}x${img.height})\n`;
+    status.textContent += `  ${name}: ${pixels.length} pixels (${img.width}x${img.height})\n`;
     return pixels;
 }
 
 document.getElementById('run').addEventListener('click', async () => {
     status.textContent = 'Работаю...\n';
     const result = {};
-    for (const [name, src] of Object.entries(overlays)) {
-        try {
-            result[name] = await extract(name, src);
-        } catch (e) {
-            status.textContent += `ОШИБКА ${name}: ${e.message}\n`;
+    for (const [cardName, card] of Object.entries(cards)) {
+        status.textContent += `\nКарта ${cardName} (offset ${card.xOffset}, ${card.yOffset}):\n`;
+        const cardData = { xOffset: card.xOffset, yOffset: card.yOffset };
+        for (const [terrainName, src] of Object.entries(card.files)) {
+            try {
+                cardData[terrainName] = await extract(terrainName, src);
+            } catch (e) {
+                status.textContent += `  ОШИБКА ${terrainName}: ${e.message}\n`;
+                cardData[terrainName] = [];
+            }
         }
+        result[cardName] = cardData;
     }
 
     const json = JSON.stringify(result);
