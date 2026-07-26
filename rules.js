@@ -1,6 +1,8 @@
 import { hexDistance, hexLabel, hexToPixel, pixelToHex } from './hexUtils.js';
-import { hexMap } from './hexmap.js';
-import { checkLOSCrossings } from './terrainLOS.js';
+import { terrainAt } from './cards.js';
+import { bresenham, pixel_is_on_Obstacle_set, setLastHit } from './terrainLOS.js';
+
+const OBSTACLES = ['woods', 'buildings', 'hills'];
 
 // ===========================================================================
 // IFT (Infantry Fire Table)
@@ -60,7 +62,7 @@ const TEM = {
 };
 
 function calcTEM(hex) {
-    const terrain = hexMap[hexLabel(hex.col, hex.row)] || [];
+    const terrain = terrainAt(hex.col, hex.row);
     if (terrain.length === 0) return 0;
     return Math.max(0, ...terrain.map(t => TEM[t] ?? 0));
 }
@@ -101,7 +103,7 @@ function calcTotalFirepower(units, targetHex) {
 // Elevation + Height Advantage
 // ===========================================================================
 function calcElevation(hex) {
-    const terrain = hexMap[hexLabel(hex.col, hex.row)] || [];
+    const terrain = terrainAt(hex.col, hex.row);
     return (terrain.includes('hill') || terrain.includes('crestLine')) ? 1 : 0;
 }
 
@@ -119,46 +121,96 @@ function calcHeightAdvantage(shooters, targetHex) {
 // ===========================================================================
 const HINDRANCE_TERRAINS = ['orchard', 'grain', 'brush'];
 
-function getHexToHexArray(fromHex, toHex) {
-    const start = hexToPixel(fromHex.col, fromHex.row);
-    const end   = hexToPixel(toHex.col, toHex.row);
-    const steps = 50;
-    const hexSet = new Set();
-    for (let i = 0; i <= steps; i++) {
-        const t = i / steps;
-        const x = start.x + (end.x - start.x) * t;
-        const y = start.y + (end.y - start.y) * t;
-        const epsilon = 0.5;
-        [
-            pixelToHex(x, y),
-            pixelToHex(x, y + epsilon),
-            pixelToHex(x, y - epsilon),
-        ].forEach(h => hexSet.add(`${h.col}-${h.row}`));
+// Hex line через cube-координаты (Red Blob Games) — O(N) без drift-итераций
+function _offsetToCube(col, row) {
+    const x = col;
+    const z = row - (col - (col & 1)) / 2;
+    return { x, y: -x - z, z };
+}
+function _cubeToOffset(c) {
+    const col = c.x;
+    const row = c.z + (col - (col & 1)) / 2;
+    return { col, row };
+}
+function _cubeRound(c) {
+    let rx = Math.round(c.x), ry = Math.round(c.y), rz = Math.round(c.z);
+    const dx = Math.abs(rx - c.x), dy = Math.abs(ry - c.y), dz = Math.abs(rz - c.z);
+    if (dx > dy && dx > dz)      rx = -ry - rz;
+    else if (dy > dz)            ry = -rx - rz;
+    else                          rz = -rx - ry;
+    return { x: rx, y: ry, z: rz };
+}
+function _hexLine(fromHex, toHex) {
+    const a = _offsetToCube(fromHex.col, fromHex.row);
+    const b = _offsetToCube(toHex.col, toHex.row);
+    const N = hexDistance(fromHex, toHex);
+    const out = [];
+    for (let i = 0; i <= N; i++) {
+        const t = N === 0 ? 0 : i / N;
+        const c = _cubeRound({
+            x: a.x + (b.x - a.x) * t,
+            y: a.y + (b.y - a.y) * t,
+            z: a.z + (b.z - a.z) * t,
+        });
+        out.push(_cubeToOffset(c));
     }
-    hexSet.delete(`${fromHex.col}-${fromHex.row}`);
-    hexSet.delete(`${toHex.col}-${toHex.row}`);
-    return [...hexSet].map(key => {
-        const [col, row] = key.split('-').map(Number);
-        return { col, row };
-    });
+    return out;
 }
 
-function isTreeLinedRoad(fromHex, toHex, intermediate) {
-    const hasRoad = h => {
-        const terrain = hexMap[hexLabel(h.col, h.row)] || [];
-        return terrain.includes('dirtRoad') || terrain.includes('pavedRoad');
-    };
-    return [fromHex, toHex, ...intermediate].every(hasRoad);
+// Возвращает:
+//   hexPath — упорядоченный список хексов от shooter к target (через cube-lerp)
+//   shield  — true iff весь путь orchard-road И ни один пиксель луча не в roads-Set
+// Правило Orchard-Road (ASL SK): выстрел вдоль tree-lined road не даёт hindrance
+// и разрешает FFMO (-1 DRM), даже если target в orchard-хексе.
+function _walkLoS(shooterHex, targetHex) {
+    const hexPath = _hexLine(shooterHex, targetHex);
+
+    const from = hexToPixel(shooterHex.col, shooterHex.row);
+    const to   = hexToPixel(targetHex.col, targetHex.row);
+    let anyRoadCrossing = false;
+    let roadHitPx = null;
+    for (const { x, y } of bresenham(from.x, from.y, to.x, to.y)) {
+        // Пропускаем пиксели в shooter/target хексе — road-outline там не считается crossing
+        const h = pixelToHex(x, y);
+        if (h.col === shooterHex.col && h.row === shooterHex.row) continue;
+        if (h.col === targetHex.col   && h.row === targetHex.row)   continue;
+        if (pixel_is_on_Obstacle_set('roads', x, y)) {
+            anyRoadCrossing = true;
+            roadHitPx = { x, y };
+            break;
+        }
+    }
+
+    let shield = !anyRoadCrossing;
+    let failHex = null;
+    if (shield) {
+        for (const h of hexPath) {
+            const t = terrainAt(h.col, h.row);
+            if (!(t.includes('orchard') && (t.includes('dirtRoad') || t.includes('pavedRoad')))) {
+                shield = false;
+                failHex = { hex: h, terrain: t };
+                break;
+            }
+        }
+    }
+    console.log(`[shield] shooter=(${shooterHex.col},${shooterHex.row}) target=(${targetHex.col},${targetHex.row}) hexPath=${hexPath.map(h => `(${h.col},${h.row})`).join('→')} anyRoad=${anyRoadCrossing}${roadHitPx ? ` roadHitPx=(${roadHitPx.x},${roadHitPx.y})` : ''} shield=${shield}${failHex ? ` failedAt=(${failHex.hex.col},${failHex.hex.row}) terrain=[${failHex.terrain}]` : ''}`);
+    return { hexPath, shield };
+}
+
+function _treeLinedRoadShield(shooterHex, targetHex) {
+    return _walkLoS(shooterHex, targetHex).shield;
 }
 
 function checkHindrance(shooters, targetHex) {
     if (shooters.length === 0) return 0;
     return Math.max(...shooters.map(shooter => {
-        const intermediate = getHexToHexArray(shooter.hex, targetHex);
-        if (isTreeLinedRoad(shooter.hex, targetHex, intermediate)) return 0;
+        const { hexPath, shield } = _walkLoS(shooter.hex, targetHex);
+        if (shield) return 0;
         let total = 0;
-        for (const h of intermediate) {
-            const terrain = hexMap[hexLabel(h.col, h.row)] || [];
+        for (const h of hexPath) {
+            if (h.col === shooter.hex.col && h.row === shooter.hex.row) continue;
+            if (h.col === targetHex.col   && h.row === targetHex.row)   continue;
+            const terrain = terrainAt(h.col, h.row);
             for (const t of terrain) {
                 if (HINDRANCE_TERRAINS.includes(t)) total += 1;
             }
@@ -168,16 +220,58 @@ function checkHindrance(shooters, targetHex) {
 }
 
 function checkLOS(shooters, targetHex) {
-    // Pixel-based блокировка: лес и здания режут LOS
+    setLastHit(null);
+
+    // Elevation цели: hill-хекс = level 1, иначе 0 (crestLine тоже считается level 1 по "hex center dot")
+    const tTerrain = terrainAt(targetHex.col, targetHex.row);
+    const tHill = tTerrain.includes('hill') || tTerrain.includes('crestLine');
+
     for (const shooter of shooters) {
+        // Elevation стрелка
+        const sTerrain = terrainAt(shooter.hex.col, shooter.hex.row);
+        const sHill = sTerrain.includes('hill') || sTerrain.includes('crestLine');
+        // "хотя бы один на ground" — ключевой флаг для применения hill-правил
+        const anyOnGround = !sHill || !tHill;
+
+        // Пиксельные центры хексов — начало и конец луча
         const from = hexToPixel(shooter.hex.col, shooter.hex.row);
         const to   = hexToPixel(targetHex.col, targetHex.row);
-        const crossings = checkLOSCrossings(from, to, [shooter.hex, targetHex]);
-        if (crossings.woods)     return false;
-        if (crossings.buildings) return false;
-        // TODO: hills — нужна elevation logic (сравнение высот)
+
+        // Один проход Брезенхема по пикселям луча
+        for (const { x, y } of bresenham(from.x, from.y, to.x, to.y)) {
+            const h = pixelToHex(x, y);
+
+            // Пиксели shooter-хекса не блокируют — юнит стоит там, а не смотрит сквозь свой террейн
+            if (h.col === shooter.hex.col && h.row === shooter.hex.row) continue;
+            // Первый же пиксель в target-хексе — прерываем: все дальнейшие тоже там
+            if (h.col === targetHex.col   && h.row === targetHex.row)   break;
+
+            // Пиксель LoS попал в hill-хекс? (crestLine тоже level 1)
+            const pTerrain = terrainAt(h.col, h.row);
+            const pixel_of_LoS_is_on_hex_with_Hill = pTerrain.includes('hill') || pTerrain.includes('crestLine');
+
+            // Проверяем каждый тип препятствия
+            for (const type of OBSTACLES) {
+                if (!pixel_is_on_Obstacle_set(type, x, y)) continue;
+
+                let los_is_blocked = false;
+                if (type === 'hills') {
+                    // hills блокирует только если LoS involves ground-юнит
+                    los_is_blocked = anyOnGround;
+                } else {
+                    // woods/buildings блокирует если пиксель LoS на hill-хексе, ИЛИ хотя бы один юнит на ground
+                    los_is_blocked = pixel_of_LoS_is_on_hex_with_Hill || anyOnGround;
+                }
+
+                if (los_is_blocked) {
+                    setLastHit({ x, y, type });
+                    return false;
+                }
+            }
+        }
     }
-    // Hindrance-порог по-прежнему hex-based (orchard/brush)
+
+    // LoS геометрически не заблокирован — остаётся проверить hindrance-порог (6+)
     return checkHindrance(shooters, targetHex) < 6;
 }
 
@@ -192,13 +286,14 @@ function calcFFNAM(unit) {
     return -1;
 }
 
-function calcFFMO(unit, targetHex) {
+function calcFFMO(unit, targetHex, treeLinedShield = false) {
     if (!unit.hasStartedMoving) return 0;
     if (unit.pinned)            return 0;
     if (calcTEM(targetHex) > 0) return 0;
-    // orchard не Open Ground — тоже отменяет FFMO
-    const terrain = hexMap[hexLabel(targetHex.col, targetHex.row)] || [];
-    if (terrain.includes('orchard')) return 0;
+    // orchard не Open Ground — отменяет FFMO,
+    // ЗА ИСКЛЮЧЕНИЕМ tree-lined road shield (правило Orchard-Road)
+    const terrain = terrainAt(targetHex.col, targetHex.row);
+    if (terrain.includes('orchard') && !treeLinedShield) return 0;
     return -1;
 }
 
@@ -591,8 +686,11 @@ function defensiveFF(firegroupUnits, targetHex, hexUnits, units) {
     const ha            = calcHeightAdvantage(firegroupUnits, targetHex);
     const tem           = baseTem > 0 ? baseTem : ha;
     const hindrance     = checkHindrance(firegroupUnits, targetHex);
+    const shield        = firegroupUnits.length > 0
+        ? _treeLinedRoadShield(firegroupUnits[0].hex, targetHex)
+        : false;
     const ffnam         = hexUnits.length > 0 ? calcFFNAM(hexUnits[0]) : 0;
-    const ffmoRaw       = hexUnits.length > 0 ? calcFFMO(hexUnits[0], targetHex) : 0;
+    const ffmoRaw       = hexUnits.length > 0 ? calcFFMO(hexUnits[0], targetHex, shield) : 0;
     const ffmo          = (ha > 0 || hindrance > 0) ? 0 : ffmoRaw;
     const leadershipDRM = calcLeadershipDRM(firegroupUnits);
     const totalDRM      = tem + hindrance + ffnam + ffmo + leadershipDRM;
@@ -665,15 +763,13 @@ export function _isRoadHex(hex, overrideTerrain = null) {
     if (overrideTerrain) {
         return overrideTerrain === 'dirtRoad' || overrideTerrain === 'pavedRoad';
     }
-    const label = hexLabel(hex.col, hex.row);
-    const terrain = hexMap[label] || [];
+    const terrain = terrainAt(hex.col, hex.row);
     return terrain.includes('dirtRoad') || terrain.includes('pavedRoad');
 }
 
 // гекс содержит Woods-Road — надо спросить игрока (UseWoods / UseRoad)
 export function _hasWoodsRoad(targetHex) {
-    const label = hexLabel(targetHex.col, targetHex.row);
-    return (hexMap[label] || []).includes('Woods-Road');
+    return terrainAt(targetHex.col, targetHex.row).includes('Woods-Road');
 }
 
 function _all_path_is_road(path) {
@@ -712,8 +808,7 @@ function lead_bonus_is_possible(u, mg, units) {
 // Стоимость входа в targetHex с учётом откуда приходим (нужно для crestLine)
 // overrideTerrain — игрок явно выбрал тип (UseWoods/UseRoad) для Woods-Road гекса
 function checkCost(targetHex, fromHex, overrideTerrain = null) {
-    const targetLabel   = hexLabel(targetHex.col, targetHex.row);
-    let targetTerrain = hexMap[targetLabel] || [];
+    let targetTerrain = terrainAt(targetHex.col, targetHex.row);
 
     if (overrideTerrain) targetTerrain = [overrideTerrain];
 
@@ -732,8 +827,7 @@ function checkCost(targetHex, fromHex, overrideTerrain = null) {
 
         // если приходим сверху (с hill или другого crestLine) — обычная цена,
         // иначе подъём по crestLine стоит вдвое
-        const fromLabel   = hexLabel(fromHex.col, fromHex.row);
-        const fromTerrain = hexMap[fromLabel] || [];
+        const fromTerrain = terrainAt(fromHex.col, fromHex.row);
         const fromAbove   = fromTerrain.includes('hill') || fromTerrain.includes('crestLine');
 
         return fromAbove ? baseCost : baseCost * 2;

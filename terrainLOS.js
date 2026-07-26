@@ -1,16 +1,27 @@
 // Pixel-based LOS проверка. Данные хранятся по картам (v, u, ...),
 // каждая карта — свой xOffset/yOffset и наборы пикселей в ЛОКАЛЬНЫХ координатах.
-// checkLOSCrossings принимает мировые координаты и для каждой карты
+// pixel_is_on_Obstacle_set принимает мировые координаты и для каждой карты
 // переводит мировой пиксель в локальный, проверяет Set-ы.
 
-import { pixelToHex } from './hexUtils.js';
+import { cards as cardRegistry } from './cards.js';
 
-// { v: { xOffset, yOffset, sets: { woods: Set, ... } }, u: {...} }
+// Размеры одной карты (совпадают с cards.js CARD_ROWS * HEX_H ≈ 645, ширина 1800)
+const CARD_W = 1800;
+const CARD_H = 645;
+
+// { v: { xOffset, yOffset, rotation, sets: { woods: Set, ... } }, u: {...} }
 const cards = {};
-export const lastHits = [];
+
+// Единственная точка блока LoS для дебажной подсветки. null = ничего.
+let _lastHit = null;
+export function getLastHit() { return _lastHit; }
+export function setLastHit(v) { _lastHit = v; }
 
 export async function initTerrainLOS() {
-    const data = await fetch('./terrainPixels.json').then(r => r.json());
+    const [data, roadData] = await Promise.all([
+        fetch('./terrainPixels.json').then(r => r.json()),
+        fetch('./roadPixels.json').then(r => r.json()).catch(() => ({})),
+    ]);
     for (const [cardName, cardData] of Object.entries(data)) {
         const sets = {};
         for (const [key, val] of Object.entries(cardData)) {
@@ -19,15 +30,23 @@ export async function initTerrainLOS() {
             for (const [x, y] of val) s.add(`${x},${y}`);
             sets[key] = s;
         }
-        // Убираем orchard-пиксели из woods (при экспорте PNG сад ошибочно попал в лес)
-        if (sets.woods && sets.orchard) {
-            for (const p of sets.orchard) sets.woods.delete(p);
-        }
         cards[cardName] = {
             xOffset: cardData.xOffset ?? 0,
             yOffset: cardData.yOffset ?? 0,
+            rotation: cardRegistry[cardName]?.rotation ?? 0,
             sets,
         };
+    }
+    // Мержим дороги (roadPixels.json) в те же карты как отдельный тип 'roads'
+    for (const [cardName, cardData] of Object.entries(roadData)) {
+        const card = cards[cardName];
+        if (!card) continue;
+        for (const [key, val] of Object.entries(cardData)) {
+            if (key === 'xOffset' || key === 'yOffset') continue;
+            const s = new Set();
+            for (const [x, y] of val) s.add(`${x},${y}`);
+            card.sets[key] = s;
+        }
     }
     console.log('[terrainLOS] loaded cards:', Object.fromEntries(
         Object.entries(cards).map(([k, c]) => [
@@ -39,7 +58,7 @@ export async function initTerrainLOS() {
     ));
 }
 
-function* bresenham(x0, y0, x1, y1) {
+export function* bresenham(x0, y0, x1, y1) {
     x0 = Math.round(x0); y0 = Math.round(y0);
     x1 = Math.round(x1); y1 = Math.round(y1);
     const dx = Math.abs(x1 - x0), dy = Math.abs(y1 - y0);
@@ -54,48 +73,34 @@ function* bresenham(x0, y0, x1, y1) {
     }
 }
 
-// Собираем все уникальные типы террейна по всем картам
-function allTerrainTypes() {
-    const types = new Set();
+// Проверяет, попадает ли мировой пиксель (worldX, worldY) в Set пикселей
+// указанного типа хотя бы на одной карте. true/false.
+export function pixel_is_on_Obstacle_set(type, worldX, worldY) {
     for (const card of Object.values(cards)) {
-        for (const type of Object.keys(card.sets)) types.add(type);
-    }
-    return [...types];
-}
-
-// Проверить пиксель (в мировых координатах) на каждой карте
-function terrainAtWorld(type, worldX, worldY) {
-    for (const [cardName, card] of Object.entries(cards)) {
         const set = card.sets[type];
         if (!set) continue;
-        const localX = worldX - card.xOffset;
-        const localY = worldY - card.yOffset;
-        if (set.has(`${localX},${localY}`)) {
-            console.log(`[LOS] ${type} hit at world (${worldX},${worldY}) card=${cardName} local=(${localX},${localY})`);
-            lastHits.push({ x: worldX, y: worldY, type, card: cardName });
-            return true;
+        let localX = worldX - card.xOffset;
+        let localY = worldY - card.yOffset;
+        // если карта визуально повёрнута — переводим мировой пиксель обратно в источник
+        if (card.rotation === 180) {
+            localX = CARD_W - 1 - localX;
+            localY = CARD_H - 1 - localY;
         }
+        if (set.has(`${localX},${localY}`)) return true;
     }
     return false;
 }
 
-export function checkLOSCrossings(from, to, excludeHexes = []) {
-    console.log(`[LOS] from=(${from.x},${from.y}) to=(${to.x},${to.y})`);
-    lastHits.length = 0;
-    const types = allTerrainTypes();
-    const crossings = {};
-    for (const type of types) crossings[type] = false;
-
-    for (const { x, y } of bresenham(from.x, from.y, to.x, to.y)) {
-        if (excludeHexes.length > 0) {
-            const h = pixelToHex(x, y);
-            if (excludeHexes.some(e => e.col === h.col && e.row === h.row)) continue;
-        }
-        for (const type of types) {
-            if (crossings[type]) continue;
-            if (terrainAtWorld(type, x, y)) crossings[type] = true;
-        }
-        if (Object.values(crossings).every(v => v)) break;
+// Экспортируем сырые пиксели террейна карты в ЛОКАЛЬНЫХ координатах.
+// Используется для дебажной визуализации (см. main.js).
+export function getCardPixels(cardName, type) {
+    const card = cards[cardName];
+    if (!card || !card.sets[type]) return [];
+    const out = [];
+    for (const key of card.sets[type]) {
+        const [x, y] = key.split(',').map(Number);
+        out.push([x, y]);
     }
-    return crossings;
+    return out;
 }
+

@@ -46,6 +46,16 @@ const cards = {
     },
 };
 
+// Отдельная конфигурация для дорог — дампится в roadPixels.json
+const roadCards = {
+    v: {
+        xOffset: 0, yOffset: 0,
+        files: {
+            roads: './graf/roads_outline.png',
+        },
+    },
+};
+
 const status = document.getElementById('status');
 const canvas = document.getElementById('c');
 const ctx = canvas.getContext('2d');
@@ -77,10 +87,9 @@ async function extract(name, src) {
     return pixels;
 }
 
-document.getElementById('run').addEventListener('click', async () => {
-    status.textContent = 'Работаю...\n';
+async function extractAll(cfg) {
     const result = {};
-    for (const [cardName, card] of Object.entries(cards)) {
+    for (const [cardName, card] of Object.entries(cfg)) {
         status.textContent += `\nКарта ${cardName} (offset ${card.xOffset}, ${card.yOffset}):\n`;
         const cardData = { xOffset: card.xOffset, yOffset: card.yOffset };
         for (const [terrainName, src] of Object.entries(card.files)) {
@@ -93,17 +102,31 @@ document.getElementById('run').addEventListener('click', async () => {
         }
         result[cardName] = cardData;
     }
+    return result;
+}
 
-    const json = JSON.stringify(result);
+function downloadJson(obj, filename) {
+    const json = JSON.stringify(obj);
     const blob = new Blob([json], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = 'terrainPixels.json';
+    a.download = filename;
     a.click();
     URL.revokeObjectURL(url);
+    status.textContent += `Скачан ${filename} (${Math.round(json.length / 1024)} KB)\n`;
+}
 
-    status.textContent += `\nГотово. Скачан terrainPixels.json (${Math.round(json.length / 1024)} KB)\n`;
+document.getElementById('run').addEventListener('click', async () => {
+    status.textContent = 'Работаю над terrainPixels...\n';
+    const terrainRes = await extractAll(cards);
+    downloadJson(terrainRes, 'terrainPixels.json');
+
+    status.textContent += '\nРаботаю над roadPixels...\n';
+    const roadRes = await extractAll(roadCards);
+    downloadJson(roadRes, 'roadPixels.json');
+
+    status.textContent += '\nГотово.\n';
 });
 </script>
 </body>

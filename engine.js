@@ -4,7 +4,7 @@ import { PhaseManager } from './phase_manager.js';
 import { pixelToHex, hexToPixel, hexLabel } from './hexUtils.js';
 import { UIState } from './uiState.js';
 import { spawn_unit } from './unitloading.js';
-import { lastHits } from './terrainLOS.js';
+import { getLastHit } from './terrainLOS.js';
 import { flipReplaceUnit, raiseToTop } from './renderer.js';
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
@@ -112,7 +112,8 @@ const handlers = {
         if (result === null) return;   // SFF constraint violated — LOS не рисуем
 
         _drawLOS(firegroupUnits, targetHex);
-        UIState.flashHitPoints([...lastHits]);   // DEBUG — зелёные точки в местах пересечений
+        const hit = getLastHit();
+        UIState.flashHitPoints(hit ? [hit] : []);   // DEBUG — зелёная точка в месте блока LoS
 
         await _apply_changes_for_targets(result.changes);
         _recordFiredFrom(firegroupUnits, hexUnits);

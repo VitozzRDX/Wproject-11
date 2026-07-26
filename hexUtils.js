@@ -66,11 +66,11 @@ export function pixelToHex(px, py) {
   return { col: clampedCol, row: clampedRow };
 }
 
-// A-Z (0..25) → одна буква; далее AA, BB, CC, ... (двойные повторяющиеся буквы)
+// A-Z (0..25) → одна буква; далее AA, AB, AC, ... (последовательные)
 function colToLetters(col) {
   const alpha = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
   if (col < 26) return alpha[col];
-  return alpha[col - 26].repeat(2);
+  return 'A' + alpha[col - 26];
 }
 
 // V-карта: col >= 0 → vA (col=0), vB, ..., vZ, vAA, ...

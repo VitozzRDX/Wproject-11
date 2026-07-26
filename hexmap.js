@@ -9,7 +9,7 @@ export const hexMap = {
   F3: ['dirtRoad', 'orchard'], G3: ['dirtRoad'], H2: ['dirtRoad'], I2: ['Woods-Road'], I1: ['dirtRoad'],
   J1: ['dirtRoad'], K2: ['dirtRoad'], L1: ['dirtRoad'], M2: ['dirtRoad'],
   N2: ['dirtRoad'], O2: ['dirtRoad'], P1: ['dirtRoad'], Q1: ['dirtRoad'],
-  Y1: ['dirtRoad'], Y2: ['dirtRoad'], Y3: ['dirtRoad'],
+  Y1: ['dirtRoad'], Y2: ['dirtRoad'], Y3: ['dirtRoad', 'orchard'],
   Z2: ['orchard'], AA2: ['orchard'],
   AC3: ['orchard', 'hill'], AC4: ['orchard', 'hill'], AF8: ['orchard'],
   X3: ['dirtRoad', 'orchard'], W4: ['dirtRoad', 'orchard'],

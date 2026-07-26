@@ -60,21 +60,20 @@ async function load_and_draw_background() {
     // Создаём новый слой для фона
     const backgroundLayer = new Konva.Layer();
 
-    // Загружаем изображения карт (доски стыкуются вертикально по BOARD_H=645, горизонтально по 1800)
-    // 1-я доска: base + terrain (заменяет 1.gif)
+    // V-карта — обёрнута в Konva.Group для возможности поворота/переворота
+    const V_W = 1800, V_H = 645;
+    const cardV = new Konva.Group({
+        name: 'card-v',
+        x: V_W / 2, y: V_H / 2,           // позиция группы в мире
+        offsetX: V_W / 2, offsetY: V_H / 2, // локальный центр вращения
+        rotation: 180,
+    });
     const img1base = await loadImage('./graf/base_layer.png');
-    backgroundLayer.add(new Konva.Image({ image: img1base, x: 0, y: 0, id: 'map1_base' }));
+    cardV.add(new Konva.Image({ image: img1base, x: 0, y: 0, id: 'map1_base' }));
     const img1terrain = await loadImage('./graf/terrain_inside_1.png');
-    backgroundLayer.add(new Konva.Image({ image: img1terrain, x: 0, y: 0, id: 'map1_terrain' }));
+    cardV.add(new Konva.Image({ image: img1terrain, x: 0, y: 0, id: 'map1_terrain' }));
 
-    // Доска bdu слева от 1-й
-    const bduBase = await loadImage('./graf/bdu_base_layer.png');
-    backgroundLayer.add(new Konva.Image({ image: bduBase, x: -1800, y: 0, id: 'bdu_base' }));
-    const bduTerrain = await loadImage('./graf/bdu_terrain_inside.png');
-    backgroundLayer.add(new Konva.Image({ image: bduTerrain, x: -1800, y: 0, id: 'bdu_terrain' }));
-
-
-    // Оверлеи контуров террейнов V-карты (x=0, y=0)
+    // Оверлеи контуров террейнов V-карты — внутри cardV, вращаются вместе
     const overlaysV = [
         './graf/woods_outline.png',
         './graf/buildings_outline.png',
@@ -88,7 +87,19 @@ async function load_and_draw_background() {
         groupV.add(new Konva.Image({ image: overlayImg, x: 0, y: 0, listening: false }));
     }
     groupV.visible(false);
-    backgroundLayer.add(groupV);
+    cardV.add(groupV);
+
+    // Отдельный оверлей дорог поверх террейна — виден всегда, поворачивается с картой
+    const roadsImg = await loadImage('./graf/roads_outline.png');
+    cardV.add(new Konva.Image({ image: roadsImg, x: 0, y: 0, listening: false }));
+
+    backgroundLayer.add(cardV);
+
+    // Доска bdu слева от V
+    const bduBase = await loadImage('./graf/bdu_base_layer.png');
+    backgroundLayer.add(new Konva.Image({ image: bduBase, x: -1800, y: 0, id: 'bdu_base' }));
+    const bduTerrain = await loadImage('./graf/bdu_terrain_inside.png');
+    backgroundLayer.add(new Konva.Image({ image: bduTerrain, x: -1800, y: 0, id: 'bdu_terrain' }));
 
     // Оверлеи контуров террейнов U-карты (x=-1800, y=0)
     const overlaysU = [
@@ -103,7 +114,7 @@ async function load_and_draw_background() {
         const overlayImg = await loadImage(src);
         groupU.add(new Konva.Image({ image: overlayImg, x: -1800, y: 0, listening: false }));
     }
-    groupU.visible(true);   // включаем U-контуры по умолчанию
+    groupU.visible(false);
     backgroundLayer.add(groupU);
 
     draw_hex_grid(backgroundLayer);

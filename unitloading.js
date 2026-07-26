@@ -62,8 +62,14 @@ const scenario = [
   { templateId: 'so_L61', id: 'fg_r2_b2', hex: { col: 6, row: 7 } },
 
   { templateId: 'so_628', id: 'fg_r2_c',  hex: { col: 7, row: 7 } },
-  { templateId: 'so_628', id: 'unit_J7',  hex: { col: 9, row: 7 } },
   { templateId: 'so_628', id: 'unit_M11', hex: { col: 12, row: 11 } },
+  { templateId: 'ge_467', id: 'unit_vN5', hex: { col: 13, row: 5 } },
+  { templateId: 'so_628', id: 'unit_vI8', hex: { col: 8, row: 8 } },
+  { templateId: 'so_628', id: 'unit_vG9', hex: { col: 6, row: 9 } },
+  { templateId: 'so_628', id: 'unit_uAG5', hex: { col: -1, row: 5 } },
+  { templateId: 'ge_467', id: 'unit_uAF7', hex: { col: -2, row: 7 } },
+  { templateId: 'ge_467', id: 'unit_uAC3', hex: { col: -5, row: 3 } },
+  { templateId: 'so_628', id: 'unit_vC5', hex: { col: 2, row: 5 } },
 ]
 
 function loadImage(src) {
