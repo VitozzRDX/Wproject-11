@@ -162,9 +162,7 @@ function _hexLine(fromHex, toHex) {
 //   shield  — true iff весь путь orchard-road И ни один пиксель луча не в roads-Set
 // Правило Orchard-Road (ASL SK): выстрел вдоль tree-lined road не даёт hindrance
 // и разрешает FFMO (-1 DRM), даже если target в orchard-хексе.
-function _walkLoS(shooterHex, targetHex) {
-    const hexPath = _hexLine(shooterHex, targetHex);
-
+function _los_stays_on_road_in_Orchard(shooterHex, targetHex, hexPath) {
     const from = hexToPixel(shooterHex.col, shooterHex.row);
     const to   = hexToPixel(targetHex.col, targetHex.row);
     let anyRoadCrossing = false;
@@ -180,36 +178,32 @@ function _walkLoS(shooterHex, targetHex) {
             break;
         }
     }
-
-    let shield = !anyRoadCrossing;
+                                    // если  пиксель LoS пересёк road , то мы вернем false 
+    let shield = !anyRoadCrossing;  // если  пиксель LoS не пересёк road, то прикрытие под Orchard-Road невозможно
     let failHex = null;
-    if (shield) {
-        for (const h of hexPath) {
-            const t = terrainAt(h.col, h.row);
-            if (!(t.includes('orchard') && (t.includes('dirtRoad') || t.includes('pavedRoad')))) {
-                shield = false;
+    if (shield) {                   // если  пиксель LoS не пересёк road
+        for (const h of hexPath) {              // бежим по hexPath
+            const t = terrainAt(h.col, h.row);  // получаем terrain-хекса
+            if (!(t.includes('orchard') && (t.includes('dirtRoad') || t.includes('pavedRoad')))) {  // и если  hex не orchard-road
+                shield = false;                 // то 
                 failHex = { hex: h, terrain: t };
                 break;
             }
         }
     }
     console.log(`[shield] shooter=(${shooterHex.col},${shooterHex.row}) target=(${targetHex.col},${targetHex.row}) hexPath=${hexPath.map(h => `(${h.col},${h.row})`).join('→')} anyRoad=${anyRoadCrossing}${roadHitPx ? ` roadHitPx=(${roadHitPx.x},${roadHitPx.y})` : ''} shield=${shield}${failHex ? ` failedAt=(${failHex.hex.col},${failHex.hex.row}) terrain=[${failHex.terrain}]` : ''}`);
-    return { hexPath, shield };
+    return shield;
 }
 
-function _treeLinedRoadShield(shooterHex, targetHex) {
-    return _walkLoS(shooterHex, targetHex).shield;
-}
 
-function checkHindrance(shooters, targetHex) {
-    if (shooters.length === 0) return 0;
-    return Math.max(...shooters.map(shooter => {
-        const { hexPath, shield } = _walkLoS(shooter.hex, targetHex);
-        if (shield) return 0;
+function checkHindrance(shooterHexes, targetHex) {
+    return Math.max(...shooterHexes.map(sHex => {
+        const hexPath = _hexLine(sHex, targetHex);
+        if (_los_stays_on_road_in_Orchard(sHex, targetHex, hexPath)) return 0;
         let total = 0;
         for (const h of hexPath) {
-            if (h.col === shooter.hex.col && h.row === shooter.hex.row) continue;
-            if (h.col === targetHex.col   && h.row === targetHex.row)   continue;
+            if (h.col === sHex.col       && h.row === sHex.row)       continue;
+            if (h.col === targetHex.col  && h.row === targetHex.row)  continue;
             const terrain = terrainAt(h.col, h.row);
             for (const t of terrain) {
                 if (HINDRANCE_TERRAINS.includes(t)) total += 1;
@@ -219,60 +213,59 @@ function checkHindrance(shooters, targetHex) {
     }));
 }
 
-function checkLOS(shooters, targetHex) {
+// Чистая геометрическая проверка LoS между двумя хексами (fromHex → toHex).
+// Возвращает true, если LoS не заблокирован препятствиями.
+// Hindrance-порог (>=6) вынесен наружу — здесь только геометрия.
+function checkLOS(fromHex, toHex) {
     setLastHit(null);
 
-    // Elevation цели: hill-хекс = level 1, иначе 0 (crestLine тоже считается level 1 по "hex center dot")
-    const tTerrain = terrainAt(targetHex.col, targetHex.row);
+    // Elevation концов: hill-хекс = level 1, иначе 0 (crestLine тоже level 1 по "hex center dot")
+    const fTerrain = terrainAt(fromHex.col, fromHex.row);
+    const fHill = fTerrain.includes('hill') || fTerrain.includes('crestLine');
+    const tTerrain = terrainAt(toHex.col, toHex.row);
     const tHill = tTerrain.includes('hill') || tTerrain.includes('crestLine');
+    // "хотя бы один на ground" — ключевой флаг для применения hill-правил
+    const anyOnGround = !fHill || !tHill;
 
-    for (const shooter of shooters) {
-        // Elevation стрелка
-        const sTerrain = terrainAt(shooter.hex.col, shooter.hex.row);
-        const sHill = sTerrain.includes('hill') || sTerrain.includes('crestLine');
-        // "хотя бы один на ground" — ключевой флаг для применения hill-правил
-        const anyOnGround = !sHill || !tHill;
+    // Пиксельные центры хексов — начало и конец луча
+    const from = hexToPixel(fromHex.col, fromHex.row);
+    const to   = hexToPixel(toHex.col, toHex.row);
 
-        // Пиксельные центры хексов — начало и конец луча
-        const from = hexToPixel(shooter.hex.col, shooter.hex.row);
-        const to   = hexToPixel(targetHex.col, targetHex.row);
+    // Один проход Брезенхема по пикселям луча
+    for (const { x, y } of bresenham(from.x, from.y, to.x, to.y)) {
+        const h = pixelToHex(x, y);
 
-        // Один проход Брезенхема по пикселям луча
-        for (const { x, y } of bresenham(from.x, from.y, to.x, to.y)) {
-            const h = pixelToHex(x, y);
+        // Пиксели from-хекса не блокируют — стрелок стоит там, а не смотрит сквозь свой террейн
+        if (h.col === fromHex.col && h.row === fromHex.row) continue;
+        // Первый же пиксель в to-хексе — прерываем: все дальнейшие тоже там
+        if (h.col === toHex.col   && h.row === toHex.row)   break;
 
-            // Пиксели shooter-хекса не блокируют — юнит стоит там, а не смотрит сквозь свой террейн
-            if (h.col === shooter.hex.col && h.row === shooter.hex.row) continue;
-            // Первый же пиксель в target-хексе — прерываем: все дальнейшие тоже там
-            if (h.col === targetHex.col   && h.row === targetHex.row)   break;
+        // Пиксель LoS попал в hill-хекс? (crestLine тоже level 1)
+        const pTerrain = terrainAt(h.col, h.row);
+        const pixel_of_LoS_is_on_hex_with_Hill = pTerrain.includes('hill') || pTerrain.includes('crestLine');
 
-            // Пиксель LoS попал в hill-хекс? (crestLine тоже level 1)
-            const pTerrain = terrainAt(h.col, h.row);
-            const pixel_of_LoS_is_on_hex_with_Hill = pTerrain.includes('hill') || pTerrain.includes('crestLine');
+        // Проверяем каждый тип препятствия
+        for (const type of OBSTACLES) {
+            if (!pixel_is_on_Obstacle_set(type, x, y)) continue;
 
-            // Проверяем каждый тип препятствия
-            for (const type of OBSTACLES) {
-                if (!pixel_is_on_Obstacle_set(type, x, y)) continue;
+            let los_is_blocked = false;
+            if (type === 'hills') {
+                // hills блокирует только если LoS involves ground-юнит
+                los_is_blocked = anyOnGround;
+            } else {
+                // woods/buildings блокирует если пиксель LoS на hill-хексе, ИЛИ хотя бы один юнит на ground
+                los_is_blocked = pixel_of_LoS_is_on_hex_with_Hill || anyOnGround;
+            }
 
-                let los_is_blocked = false;
-                if (type === 'hills') {
-                    // hills блокирует только если LoS involves ground-юнит
-                    los_is_blocked = anyOnGround;
-                } else {
-                    // woods/buildings блокирует если пиксель LoS на hill-хексе, ИЛИ хотя бы один юнит на ground
-                    los_is_blocked = pixel_of_LoS_is_on_hex_with_Hill || anyOnGround;
-                }
-
-                if (los_is_blocked) {
-                    setLastHit({ x, y, type });
-                    return false;
-                }
+            if (los_is_blocked) {
+                setLastHit({ x, y, type });
+                return false;
             }
         }
     }
 
-    // LoS геометрически не заблокирован — остаётся проверить hindrance-порог (6+)
-    return checkHindrance(shooters, targetHex) < 6;
+    // Геометрия чиста — LoS не заблокирован
+    return true;
 }
 
 // ===========================================================================
@@ -619,7 +612,8 @@ function _closest_enemy_distance(shooter, units) {
     let min = Infinity;
     for (const u of Object.values(units)) {
         if (u.nation === shooter.nation) continue;
-        if (!checkLOS([shooter], u.hex)) continue;   // нет LOS → не KEU
+        if (!checkLOS(shooter.hex, u.hex)) continue;                 // геометрия LoS блокирована → не KEU
+        if (checkHindrance([shooter.hex], u.hex) >= 6) continue;     // hindrance-порог тоже блокирует
         // TODO: concealed check когда появится (u.concealed)
         const d = hexDistance(shooter.hex, u.hex);
         if (d < min) min = d;
@@ -675,7 +669,11 @@ function defensiveFF(firegroupUnits, targetHex, hexUnits, units) {
         return null;
     }
 
-    const los = checkLOS(firegroupUnits, targetHex);
+    // Геометрический LoS — от каждого хекса стрелков; блокировка хотя бы одного = нет LoS
+    const shooterHexes = firegroupUnits.map(u => u.hex);
+    const losOk        = shooterHexes.every(h => checkLOS(h, targetHex));
+    const hindrance    = checkHindrance(shooterHexes, targetHex);
+    const los          = losOk && hindrance < 6;
     console.log(`[defensiveFF] LOS=${los}`);
     if (!los) {
         console.log('[defensiveFF] нет LOS — огонь невозможен');
@@ -685,10 +683,11 @@ function defensiveFF(firegroupUnits, targetHex, hexUnits, units) {
     const baseTem       = calcTEM(targetHex);
     const ha            = calcHeightAdvantage(firegroupUnits, targetHex);
     const tem           = baseTem > 0 ? baseTem : ha;
-    const hindrance     = checkHindrance(firegroupUnits, targetHex);
-    const shield        = firegroupUnits.length > 0
-        ? _treeLinedRoadShield(firegroupUnits[0].hex, targetHex)
-        : false;
+    let shield = false;
+    if (firegroupUnits.length > 0) {
+        const sHex = firegroupUnits[0].hex;
+        shield = _los_stays_on_road_in_Orchard(sHex, targetHex, _hexLine(sHex, targetHex));
+    }
     const ffnam         = hexUnits.length > 0 ? calcFFNAM(hexUnits[0]) : 0;
     const ffmoRaw       = hexUnits.length > 0 ? calcFFMO(hexUnits[0], targetHex, shield) : 0;
     const ffmo          = (ha > 0 || hindrance > 0) ? 0 : ffmoRaw;
