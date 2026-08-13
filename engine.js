@@ -63,6 +63,7 @@ const handlers = {
                 State.setUnit(unitId, 'inFireGroup', false);
             }
             State.fireGroup = [];
+            State.fireGroupHexesArray = [];
             return;
         }
         if (State.movementGroup.length > 0) {
@@ -97,31 +98,51 @@ const handlers = {
     
     DefensiveFirstFire: async (ctx) => {
         const targetHex = pixelToHex(ctx.pos.x, ctx.pos.y);
-        const hexUnits  = _movedTargetsInHex(targetHex);
-        if (hexUnits.length === 0) return;
+        const initialMovedTargets = _movedTargetsInHex(targetHex);
+        if (initialMovedTargets.length === 0) return;
 
         const firegroupUnits = State.fireGroup.map(id => State.units[id]);
 
         // 3.3.3: тот же стрелок не может стрелять по той же цели в том же гексе если MF<2
-        if (_illegal_targets(hexUnits, firegroupUnits)) {
+        if (_illegal_targets(initialMovedTargets, firegroupUnits)) {
             console.log('Rule 3.3.3: same shooter → same target in same hex with MF<2 — отклонено');
             return;
         }
 
-        const result = Rules.defensiveFF(firegroupUnits, targetHex, hexUnits, State.units);
-        if (result === null) return;   // SFF constraint violated — LOS не рисуем
+        // Отсеиваем хексы стрелков без LoS/hindrance, разбиваем оставшиеся на adjacency-компоненты (sub-FGs)
+        const validHexes = Rules.filter_hexes_with_Los(State.fireGroupHexesArray, targetHex);
+        console.log(`[DFF] valid ${validHexes.length}/${State.fireGroupHexesArray.length} shooter hexes`);
 
-        _drawLOS(firegroupUnits, targetHex);
+        // Всегда рисуем LoS-линии от всех стрелков FG и точку блока (если был),
+        // даже если не будет ни одного валидного sub-FG.
+        // Зелёные — LoS открыт, красные — заблокирован.
+        _drawLOS(State.fireGroupHexesArray, targetHex, validHexes);
         const hit = getLastHit();
-        UIState.flashHitPoints(hit ? [hit] : []);   // DEBUG — зелёная точка в месте блока LoS
+        UIState.flashHitPoints(hit ? [hit] : []);
 
-        await _apply_changes_for_targets(result.changes);
-        _recordFiredFrom(firegroupUnits, hexUnits);
+        const firedUnits = new Set();
 
-        // defender обновляет firing counter:
-        //   ' ' → FirstFire (первый выстрел этого MPh)
-        //   'FirstFire' → FinalFire (после SFF)
+        for (const hexesArr of Rules.array_of_adjacent_Hexes_arrays(validHexes)) {
+            const subFG = firegroupUnits.filter(u => Rules.hexInList(u.hex, hexesArr));
+            if (subFG.length === 0) continue;
+
+            // Свежий список целей — предыдущая sub-FG могла кого-то eliminated/reduced
+            const movedTargets = _movedTargetsInHex(targetHex);
+            if (movedTargets.length === 0) break;
+
+            console.log(`[DFF] sub-FG hexes=${hexesArr.map(h=>`(${h.col},${h.row})`).join(',')} units=${subFG.map(u=>u.id).join(',')}`);
+
+            const result = Rules.defensiveFF(subFG, targetHex, movedTargets, State.units);
+            if (result === null) continue;   // SFF/FPF нарушено для этой sub-FG — пропускаем
+
+            subFG.forEach(u => firedUnits.add(u.id));   // отмечаем реально стрелявших
+            await _apply_changes_for_targets(result.changes);
+            _recordFiredFrom(subFG, movedTargets);
+        }
+
+        // Финал: firingStatus counters — только тем, кто реально стрелял
         firegroupUnits.forEach(u => {
+            if (!firedUnits.has(u.id)) return;
             if (u.firingStatus === undefined) return;
             if (u.firingStatus === 'FirstFire') {
                 State.setUnit(u.id, 'firingStatus', 'FinalFire');
@@ -132,6 +153,7 @@ const handlers = {
 
         State.fireGroup.forEach(id => State.setUnit(id, 'inFireGroup', false));
         State.fireGroup = [];
+        State.fireGroupHexesArray = [];
     },
 
     NextPhase: () => {
@@ -227,10 +249,15 @@ function _recordFiredFrom(firegroupUnits, hexUnits) {
 }
 
 // нарисовать LOS-линии от каждого стрелка к центру targetHex
-function _drawLOS(firegroupUnits, targetHex) {
+function _drawLOS(shooterHexes, targetHex, validHexes) {
     const targetCenter = hexToPixel(targetHex.col, targetHex.row);
-    firegroupUnits.forEach(u => {
-        UIState.flashLOS(hexToPixel(u.hex.col, u.hex.row), targetCenter);
+    shooterHexes.forEach(h => {
+        const isValid = validHexes.some(v => v.col === h.col && v.row === h.row);
+        UIState.flashLOS(
+            hexToPixel(h.col, h.row),
+            targetCenter,
+            isValid ? 'lime' : 'red'
+        );
     });
 }
 
@@ -483,6 +510,11 @@ function _addToFireGroup(unitId) {
     if (!State.fireGroup.includes(unitId)) {
         State.fireGroup.push(unitId);
         State.setUnit(unitId, 'inFireGroup', true);
+
+        const key = `${unit.hex.col},${unit.hex.row}`;
+        if (!State.fireGroupHexesArray.some(h => `${h.col},${h.row}` === key)) {
+            State.fireGroupHexesArray.push({ col: unit.hex.col, row: unit.hex.row });
+        }
     }
 }
 

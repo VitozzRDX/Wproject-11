@@ -70,6 +70,7 @@ const scenario = [
   { templateId: 'ge_467', id: 'unit_uAF7', hex: { col: -2, row: 7 } },
   { templateId: 'ge_467', id: 'unit_uAC3', hex: { col: -5, row: 3 } },
   { templateId: 'so_628', id: 'unit_vC5', hex: { col: 2, row: 5 } },
+  { templateId: 'so_628', id: 'unit_vG5', hex: { col: 6, row: 5 } },
 ]
 
 function loadImage(src) {

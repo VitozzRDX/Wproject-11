@@ -157,6 +157,43 @@ function _hexLine(fromHex, toHex) {
     return out;
 }
 
+// hex h есть в списке list?
+function _hexInList(h, list) {
+    return list.some(x => x.col === h.col && x.row === h.row);
+}
+
+// Разбивает массив хексов на группы связанных соседей (hexDistance === 1) через BFS
+function array_of_adjacent_Hexes_arrays(hexes) {
+    const visited = new Set();
+    const result  = [];
+    for (const start of hexes) {
+        const startKey = `${start.col},${start.row}`;
+        if (visited.has(startKey)) continue;
+
+        const adjacent_Hexes_array = [];
+        const adjacent_Hexes       = [start];
+        while (adjacent_Hexes.length) {
+            const cur    = adjacent_Hexes.shift();
+            const curKey = `${cur.col},${cur.row}`;
+            if (visited.has(curKey)) continue;
+            visited.add(curKey);
+            adjacent_Hexes_array.push(cur);
+            for (const other of hexes) {
+                if (hexDistance(cur, other) === 1) adjacent_Hexes.push(other);
+            }
+        }
+        result.push(adjacent_Hexes_array);
+    }
+    return result;
+}
+
+// Отсеивает хексы стрелков, у которых нет LoS до target или hindrance ≥ 6
+function filter_hexes_with_Los(hexes, targetHex) {
+    return hexes.filter(h =>
+        checkLOS(h, targetHex) && checkHindrance([h], targetHex) < 6
+    );
+}
+
 // Возвращает:
 //   hexPath — упорядоченный список хексов от shooter к target (через cube-lerp)
 //   shield  — true iff весь путь orchard-road И ни один пиксель луча не в roads-Set
@@ -987,6 +1024,9 @@ export const Rules = {
 
     // огонь
     defensiveFF,
+    filter_hexes_with_Los,
+    array_of_adjacent_Hexes_arrays,
+    hexInList: _hexInList,
 
     arrangeMovement(ctx) {
         if (ctx.movementGroup.length === 0) return null;

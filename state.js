@@ -3,6 +3,7 @@ export const State = {
     units: {},
     mfspent: false,
     fireGroup: [],
+    fireGroupHexesArray: [],       // уникальные хексы стрелков FG
     movementGroup: [],
     movementStackHex: null,
     original_group: [],            // снимок mg при последнем Esc

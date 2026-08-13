@@ -10,7 +10,7 @@ export const RendererUI = {
         UIState.subscribe((action, label, data) => {
             if (action === 'add')            RendererUI.drawButton(data);
             if (action === 'remove')         RendererUI.removeButton(label);
-            if (action === 'flashLOS')       RendererUI.drawLOSLine(data.from, data.to);
+            if (action === 'flashLOS')       RendererUI.drawLOSLine(data.from, data.to, data.color);
             if (action === 'flashHitPoints') RendererUI.drawHitPoints(data);
         });
 
@@ -18,10 +18,10 @@ export const RendererUI = {
         Object.values(UIState.buttons).forEach(def => RendererUI.drawButton(def));
     },
 
-    drawLOSLine(from, to) {
+    drawLOSLine(from, to, color = 'red') {
         const line = new Konva.Line({
             points: [from.x, from.y, to.x, to.y],
-            stroke: 'red',
+            stroke: color,
             strokeWidth: 1,
             listening: false,
         });
