@@ -71,6 +71,7 @@ function calcTEM(hex) {
 // Firepower
 // ===========================================================================
 function calcFirepower(unit, targetHex) {
+    if (unit.broken) return 0;              // сломанный weapon или пехота не стреляет
     if (unit.type === 'leader') return 0;   // лидер сам по себе не стреляет
     const dist = hexDistance(unit.hex, targetHex);
     let fp   = unit.pinned ? unit.firepower / 2 : unit.firepower;
@@ -375,6 +376,34 @@ function _rollD6_() {
     return Math.floor(Math.random()*6) + 1;
 }
 
+// Возвращает Set id weapons, у которых сработал B# (malfunction).
+// Effective B# = weapon.breakdownNumber - 2 если weapon уже был FirstFire/FinalFire до этой атаки.
+function _calc_malfunction(weaponsInFG, baseDr) {
+    const broken = new Set();
+    weaponsInFG.forEach(u => {
+        const bReduce    = (u.firingStatus === 'FirstFire' || u.firingStatus === 'FinalFire') ? 2 : 0;
+        const effectiveB = u.breakdownNumber - bReduce;
+        if (baseDr >= effectiveB) {
+            console.log(`[weapon ${u.id}] B# hit: DR=${baseDr} >= ${effectiveB} → malfunctioned`);
+            broken.add(u.id);
+        }
+    });
+    return broken;
+}
+
+// Возвращает массив id weapons, сохранивших RoF (не бампаем их firingStatus). Сломанные пропускаются.
+function _calc_weapons_kept_RoF(weaponsInFG, coloredDie, brokenWeapons) {
+    const kept = [];
+    weaponsInFG.forEach(u => {
+        if (brokenWeapons.has(u.id)) return;
+        if (coloredDie <= u.rof) {
+            console.log(`[weapon ${u.id}] RoF preserved: coloredDie=${coloredDie} <= rof=${u.rof}`);
+            kept.push(u.id);
+        }
+    });
+    return kept;
+}
+
 function calcFireEffect(units, targetHex, drm = 0) {
     const fp    = calcTotalFirepower(units, targetHex);
     let col     = getIFTColumn(fp);
@@ -384,7 +413,7 @@ function calcFireEffect(units, targetHex, drm = 0) {
 
     if (red === white) {
         const newCol = _applyCowering(units, col, red, white);
-        if (newCol === null) return false;
+        if (newCol === null) return { effect: false, baseDr: dr, coloredDie: red };
         col = newCol;
     }
 
@@ -395,16 +424,17 @@ function calcFireEffect(units, targetHex, drm = 0) {
     console.log(`[calcFireEffect] FP=${fp}, col=${col}, DR=${dr} (${red}+${white}), DRM=${drm}, idx=${idx}`);
     if (idx >= arr.length) {
         console.log(`[calcFireEffect] промах (idx ${idx} >= length ${arr.length})`);
-        return { effect: false, baseDr: dr };
+        return { effect: false, baseDr: dr, coloredDie: red };
     }
     console.log(`[calcFireEffect] результат:`, arr[idx]);
-    return { effect: arr[idx], baseDr: dr };
+    return { effect: arr[idx], baseDr: dr, coloredDie: red };
 }
 
 // Обработка MC для группы целей.
 // Лидеры проверяются первыми (лучший по морали → худший), каждый использует
 // накопленный лидер-DRM от прошедших unharmed. Non-leaders — с полным DRM.
 function _processMC(targets, k, result, fixedDr = null) {
+    targets = targets.filter(u => u.category !== 'carried');   // weapons без morale — не проходят MC
     // Сортировка лидеров по эффективной морали (broken → brokenMorale)
     const effMorale = u => u.broken ? u.brokenMorale : u.morale;
     const leaders    = targets.filter(u => u.type === 'leader').sort((a,b) => effMorale(b) - effMorale(a));
@@ -557,6 +587,7 @@ function _llmc(leader, targets, result) {
 // PTC для группы целей: лидеры первыми (лучший по морали),
 // накопленный leadership DRM применяется к последующим (себе не помогает).
 function _processPTC(targets, drm, result) {
+    targets = targets.filter(u => u.category !== 'carried');   // weapons не проходят PTC
     // Broken/pinned не роллят PTC (правило "Units cannot be pinned more than once per Player Turn").
     // Сортировка лидеров по эффективной морали.
     const effMorale = u => u.broken ? u.brokenMorale : u.morale;
@@ -597,6 +628,7 @@ function _processPTC(targets, drm, result) {
 function applyFireEffect(effect, targets) {
     const result = {};
     if (effect === false) return result;
+    targets = targets.filter(u => u.category !== 'carried');   // weapons никогда не в целях
     const [k, type] = effect;
 
     switch (type) {
@@ -733,8 +765,14 @@ function defensiveFF(firegroupUnits, targetHex, hexUnits, units) {
 
     console.log(`[defensiveFF] TEM=${tem}, HINDRANCE=${hindrance}, FFNAM=${ffnam}, FFMO=${ffmo}, LEADER=${leadershipDRM}, totalDRM=${totalDRM}`);
 
-    const { effect, baseDr } = calcFireEffect(firegroupUnits, targetHex, totalDRM);
+    const { effect, baseDr, coloredDie } = calcFireEffect(firegroupUnits, targetHex, totalDRM);
     const changes = applyFireEffect(effect, hexUnits);
+
+    // B# (malfunction) и RoF (сохранение статуса) для weapons в FG
+    const weaponsInFG       = firegroupUnits.filter(u => u.category === 'carried');
+    const brokenWeapons     = _calc_malfunction(weaponsInFG, baseDr);
+    for (const id of brokenWeapons) changes[id] = 'broken';   // флип на brokenSrc через _apply_changes_for_targets
+    const weaponsKeepingRoF = _calc_weapons_kept_RoF(weaponsInFG, coloredDie, brokenWeapons);
 
     // FPF Self-NMC: если FinalFire-стрелки в FG, они (+ directing leaders)
     // проходят NMC с original DR + leadership DRM (k=0, только leader help).
@@ -748,7 +786,7 @@ function defensiveFF(firegroupUnits, targetHex, hexUnits, units) {
         _checkLeaderLoss(nmcSubjects, changes);
     }
 
-    return { changes };
+    return { changes, weaponsKeepingRoF };
 }
 
 // Стоимость входа в гекс по типу террейна (MF)
@@ -970,7 +1008,23 @@ export const Rules = {
     },
 
     checkIfAddingToFireGroupIsValid(unit, defSide, fg, units) {
-        if (unit.nation !== defSide) return false;
+        // сломанный юнит (пехота или weapon) — не стреляет
+        if (unit.broken) return false;
+
+        if (unit.category === 'carried') {
+            // валяется без хозяина
+            if (!unit.possessorId) return false;
+            const possessor = units[unit.possessorId];
+            // хозяин не в форме — оружие не стреляет
+            if (possessor.broken || possessor.pinned) return false;
+            // Национальность weapon = национальность possessor'а (можно владеть трофейным)
+            if (possessor.nation !== defSide) return false;
+        } else {
+            // Своя национальность у пехоты
+            if (unit.nation !== defSide) return false;
+        }
+
+        // Общие правила смежности (те же для пехоты и weapon)
         if (!fg || fg.length === 0) return true;
         if (_check_if_unit_is_in_same_hex_as_fg(unit, fg, units)) return true;
         if (_check_link_for_firing_group(unit, fg, units)) return true;

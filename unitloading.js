@@ -3,12 +3,16 @@ import { hexToPixel } from './hexUtils.js';
 import { Rules } from './rules.js';
 
 // ---------------------------------------------------------------------------
-// Цепочка наследования
+// Цепочка наследования — единая для юнитов и оружия
 // ---------------------------------------------------------------------------
 const Unit             = { state: 'ready' };
-const Infantry         = { ...Unit, hasStartedMoving: false, movementCompleted: false,
+
+// --- Ветвь: пехота (сама двигается, имеет morale) ---
+const Infantry         = { ...Unit, category: 'infantry',
+                                    broken: false,        // morale-broken (провалил MC, в rout)
+                                    hasStartedMoving: false, movementCompleted: false,
                                     leaderBonus: 0, roadBonus: 1, usedWoodsRoad: false,
-                                    broken: false, pinned: false, wounded: false, exhausted: false,
+                                    pinned: false, wounded: false, exhausted: false,
                                     doubleTime: false, assaultMovement: false,
                                     desperationMorale: false,
                                     mf_spent_in_current_hex: 0 };
@@ -18,6 +22,13 @@ const GermanSquad_1st  = { ...Squad,  nation: 'german', quality: '1stLine', self
 const SovietSquad_Elite= { ...Squad,  nation: 'soviet', quality: 'Elite',   selfRally: true  };
 const GermanLeader     = { ...Leader, nation: 'german' };
 const SovietLeader     = { ...Leader, nation: 'soviet' };
+
+// --- Ветвь: переносимые предметы (SW, guns) — требуют possessor ---
+const CarriedItem      = { ...Unit, category: 'carried',
+                                    possessorId: null,
+                                    broken: false };      // weapon-jam / malfunction (B# сработал)
+const SW               = { ...CarriedItem, type: 'SW', firingStatus: ' ' };
+const MG               = { ...SW, kind: 'MG' };
 
 // ---------------------------------------------------------------------------
 // Шаблоны — только уникальные цифры
@@ -30,6 +41,14 @@ const TEMPLATES = {
   'ge_L91': { ...GermanLeader, morale: 9, brokenMorale: 9, leadershipModifier: -1, selfRally: true, src: './graf/geL91.gif', brokenSrc: './graf/geL91b.gif' },
   'ge_L81': { ...GermanLeader, morale: 8, brokenMorale: 8, leadershipModifier: -1, selfRally: true, src: './graf/geL81.gif', brokenSrc: './graf/geL81b.gif' },
   'so_L61': { ...SovietLeader, morale: 6, brokenMorale: 6, leadershipModifier: -1, selfRally: true, src: './graf/ruL61.gif', brokenSrc: './graf/ruL61b.gif' },
+
+  // --- Оружие ---
+  'ru_LMG': { ...MG, nation: 'soviet', firepower: 2, range: 6,
+              breakdownNumber: 11, rof: 1, repairNumber: 2,
+              src: './graf/ruLMG.gif', brokenSrc: './graf/ruLMGb.gif' },
+  'ge_HMG': { ...MG, nation: 'german', firepower: 7, range: 16,
+              breakdownNumber: 12, rof: 3, repairNumber: 3,
+              src: './graf/geHMG.gif', brokenSrc: './graf/geHMGb.gif' },
 };
 
 // ---------------------------------------------------------------------------
@@ -71,6 +90,11 @@ const scenario = [
   { templateId: 'ge_467', id: 'unit_uAC3', hex: { col: -5, row: 3 } },
   { templateId: 'so_628', id: 'unit_vC5', hex: { col: 2, row: 5 } },
   { templateId: 'so_628', id: 'unit_vG5', hex: { col: 6, row: 5 } },
+
+  // оружие
+  { templateId: 'ge_HMG', id: 'geHMG_vG3', possessorId: 'unit_06' },
+  { templateId: 'ru_LMG', id: 'ruLMG_vG5', possessorId: 'unit_vG5' },
+  { templateId: 'ru_LMG', id: 'ruLMG_vF7', possessorId: 'fg_r2_a1' },
 ]
 
 function loadImage(src) {
@@ -276,17 +300,30 @@ const ffBigText = new Konva.Text({
 // Создаём и загружаем все юниты сценария
 // ---------------------------------------------------------------------------
 export async function createAndLoadUnits(layer) {
-    for (const { templateId, hex, id } of scenario) {
+    for (const record of scenario) {
+        const tmpl = TEMPLATES[record.templateId];
 
-        const template = { ...TEMPLATES[templateId], id, hex, path: [{ hex, isRoad: Rules._isRoadHex(hex) }] };
-        const image       = await loadImage(template.src);
-        const { x, y }    = hexToPixel(hex.col, hex.row);
-        const cx          = x - image.width  / 2;
-        const cy          = y - image.height / 2;
+        // Для carried с possessorId hex берётся от possessor'а
+        const resolvedHex = record.possessorId
+            ? State.units[record.possessorId]?.hex
+            : record.hex;
+
+        const template = {
+            ...tmpl,
+            id: record.id,
+            hex: resolvedHex,
+            path: [{ hex: resolvedHex, isRoad: Rules._isRoadHex(resolvedHex) }],
+        };
+        if (record.possessorId) template.possessorId = record.possessorId;
+
+        const image    = await loadImage(template.src);
+        const { x, y } = hexToPixel(resolvedHex.col, resolvedHex.row);
+        const cx       = x - image.width  / 2;
+        const cy       = y - image.height / 2;
         createUnit({ ...template, image, x: cx, y: cy }, layer);
 
         // предзагрузка half-squad картинок (для мгновенной замены)
-        const hsId = TEMPLATES[templateId].halfSquad;
+        const hsId = tmpl.halfSquad;
         if (hsId) {
             const hs = TEMPLATES[hsId];
             if (hs.src) loadImage(hs.src);

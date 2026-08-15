@@ -6,6 +6,7 @@ import { UIState } from './uiState.js';
 import { spawn_unit } from './unitloading.js';
 import { getLastHit } from './terrainLOS.js';
 import { flipReplaceUnit, raiseToTop } from './renderer.js';
+import { recalculateHex } from './positioning.js';
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
@@ -84,7 +85,7 @@ const handlers = {
             // копируем текущую MG в original_group ДО очистки
             State.original_group = [...State.movementGroup];
             for (const unitId of State.movementGroup) {
-                State.setUnit(unitId, 'inMovementGroup', false);
+                _setInMovementGroup(unitId, false);
             }
             State.movementGroup = [];
             State.movementStackHex = null;
@@ -120,7 +121,8 @@ const handlers = {
         const hit = getLastHit();
         UIState.flashHitPoints(hit ? [hit] : []);
 
-        const firedUnits = new Set();
+        const firedUnits        = new Set();
+        const weaponsKeepingRoF = new Set();
 
         for (const hexesArr of Rules.array_of_adjacent_Hexes_arrays(validHexes)) {
             const subFG = firegroupUnits.filter(u => Rules.hexInList(u.hex, hexesArr));
@@ -136,13 +138,15 @@ const handlers = {
             if (result === null) continue;   // SFF/FPF нарушено для этой sub-FG — пропускаем
 
             subFG.forEach(u => firedUnits.add(u.id));   // отмечаем реально стрелявших
+            for (const id of result.weaponsKeepingRoF) weaponsKeepingRoF.add(id);   // аккумулируем weapons с сохранённым RoF
             await _apply_changes_for_targets(result.changes);
             _recordFiredFrom(subFG, movedTargets);
         }
 
-        // Финал: firingStatus counters — только тем, кто реально стрелял
+        // Финал: firingStatus counters — только тем, кто реально стрелял (weapons с RoF сохраняют статус)
         firegroupUnits.forEach(u => {
             if (!firedUnits.has(u.id)) return;
+            if (weaponsKeepingRoF.has(u.id)) return;   // RoF сохранил — не крутим счётчик
             if (u.firingStatus === undefined) return;
             if (u.firingStatus === 'FirstFire') {
                 State.setUnit(u.id, 'firingStatus', 'FinalFire');
@@ -265,6 +269,7 @@ function _drawLOS(shooterHexes, targetHex, validHexes) {
 function _remove_unit(unitId) {
     const u = State.units[unitId];
     if (!u) return;
+    const hexOfDead = u.hex;   // запомнить чтобы перепозиционировать weapons после удаления
     const layer = u.node.getLayer();
     u.node.destroy();
     delete State.units[unitId];
@@ -276,6 +281,20 @@ function _remove_unit(unitId) {
     if (State.moved_movement_group) {
         State.moved_movement_group = State.moved_movement_group.filter(x => x !== unitId);
     }
+
+    // Possessed weapons убитого юнита — падают на землю (drop):
+    // сбрасываем possessorId, снимаем рамки MG/FG, вычёркиваем из State.fireGroup
+    Object.values(State.units).forEach(w => {
+        if (w.category !== 'carried' || w.possessorId !== unitId) return;
+        State.setUnit(w.id, 'possessorId', null);
+        State.setUnit(w.id, 'inMovementGroup', false);
+        State.setUnit(w.id, 'inFireGroup', false);
+        State.fireGroup = State.fireGroup.filter(x => x !== w.id);
+    });
+
+    // Перепозиционировать хекс — unpossessed weapons уйдут в низ стека по _stackOrder
+    if (hexOfDead) recalculateHex(hexOfDead);
+
     layer?.batchDraw();
 }
 
@@ -332,12 +351,13 @@ async function _apply_changes_for_targets(changes) {
         // Rules могли замутировать флаги — синкаем через State.setUnit чтобы Renderer их подхватил
         if (u?.desperationMorale) State.setUnit(id, 'desperationMorale', true);
         // NMC-fail сбрасывает Pin и CX — синкаем чтобы Renderer убрал маркеры
-        if (u && state === 'broken') {
+        // (только для infantry — у weapon нет pinned/exhausted)
+        if (u && state === 'broken' && u.category !== 'carried') {
             State.setUnit(id, 'pinned',    u.pinned);
             State.setUnit(id, 'exhausted', u.exhausted);
         }
         if ((state === 'pinned' || state === 'broken') && State.movementGroup.includes(id)) {
-            State.setUnit(id, 'inMovementGroup', false);
+            _setInMovementGroup(id, false);
             State.movementGroup = State.movementGroup.filter(x => x !== id);
             if (State.movementGroup.length === 0) {
                 State.movementStackHex = null;
@@ -393,7 +413,7 @@ function _executeMove(targetHex, overrideTerrain) {
 function _clear_MG_if_all_completed() {
     if (!State.movementGroup.every(id => State.units[id].movementCompleted)) return;
 
-    State.movementGroup.forEach(id => State.setUnit(id, 'inMovementGroup', false));
+    State.movementGroup.forEach(id => _setInMovementGroup(id, false));
     State.movementGroup    = [];
     State.movementStackHex = null;
 }
@@ -415,6 +435,13 @@ function _apply_movement_result_in_State_for_all_MG(result, targetHex, overrideT
         State.setUnit(unitId, 'roadBonus',         fields.roadBonus);
         State.setUnit(unitId, 'hasStartedMoving',  fields.hasStartedMoving);
         State.setUnit(unitId, 'movementCompleted', fields.movementCompleted);
+
+        // Possessed carried едут с possessor'ом
+        Object.values(State.units).forEach(w => {
+            if (w.category === 'carried' && w.possessorId === unitId) {
+                State.setUnit(w.id, 'hex', targetHex);
+            }
+        });
     });
 }
 
@@ -442,7 +469,7 @@ function _finalize_unfinished_previous_MG() {
         State.moved_movement_group.forEach(id => {
             State.setUnit(id, 'mf', 0);
             State.setUnit(id, 'movementCompleted', true);
-            State.setUnit(id, 'inMovementGroup', false);
+            _setInMovementGroup(id, false);
         });
         State.moved_movement_group = null;
     }
@@ -455,7 +482,7 @@ function _finalize_unfinished_previous_MG() {
         if (State.splitted_group.includes(u.id))  return;
         State.setUnit(u.id, 'mf', 0);
         State.setUnit(u.id, 'movementCompleted', true);
-        State.setUnit(u.id, 'inMovementGroup', false);
+        _setInMovementGroup(u.id, false);
     });
 }
 
@@ -464,8 +491,26 @@ function _create_moved_movement_group_in_State() {
     State.moved_movement_group = [...State.movementGroup];
 }
 
+// Синхронно ставит/снимает inMovementGroup у юнита И всех его possessed carried
+function _setInMovementGroup(unitId, value) {
+    State.setUnit(unitId, 'inMovementGroup', value);
+    Object.values(State.units).forEach(u => {
+        if (u.category === 'carried' && u.possessorId === unitId) {
+            State.setUnit(u.id, 'inMovementGroup', value);
+        }
+    });
+}
+
 function _addToMovementGroup(unitId) {
-    const unit = State.units[unitId];
+    let unit = State.units[unitId];
+
+    // Клик по carried → редиректим на possessor'а (weapon сам не добавляется в MG,
+    // но при добавлении possessor'а подсветится через _setInMovementGroup)
+    if (unit?.category === 'carried' && unit.possessorId) {
+        unitId = unit.possessorId;
+        unit   = State.units[unitId];
+    }
+
     const activeSide = PhaseManager.getActiveSide();
 
     // Если movementStackHex не установлен, записываем гекс текущего юнита
@@ -478,7 +523,7 @@ function _addToMovementGroup(unitId) {
     }
     if (!State.movementGroup.includes(unitId)) {
         State.movementGroup.push(unitId);
-        State.setUnit(unitId, 'inMovementGroup', true);
+        _setInMovementGroup(unitId, true);
 
         if (Rules.checkIfDoubleTimeForMovementGroupIsValid(State.movementGroup, State.units)) {
             UIState.addButton('DoubleTime', { x: 10, y: 100, label: 'DoubleTime' });
