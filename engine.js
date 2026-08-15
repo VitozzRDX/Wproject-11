@@ -1,8 +1,14 @@
 import { State } from './state.js';
 import { Rules } from './rules.js';
 import { PhaseManager } from './phase_manager.js';
-import { pixelToHex } from './hexUtils.js';
+import { pixelToHex, hexToPixel, hexLabel } from './hexUtils.js';
 import { UIState } from './uiState.js';
+import { spawn_unit } from './unitloading.js';
+import { getLastHit } from './terrainLOS.js';
+import { flipReplaceUnit, raiseToTop } from './renderer.js';
+import { recalculateHex } from './positioning.js';
+
+const sleep = ms => new Promise(r => setTimeout(r, ms));
 
 const handlers = {
     // SELECT_UNIT: (ctx) => {
@@ -58,6 +64,7 @@ const handlers = {
                 State.setUnit(unitId, 'inFireGroup', false);
             }
             State.fireGroup = [];
+            State.fireGroupHexesArray = [];
             return;
         }
         if (State.movementGroup.length > 0) {
@@ -78,19 +85,81 @@ const handlers = {
             // копируем текущую MG в original_group ДО очистки
             State.original_group = [...State.movementGroup];
             for (const unitId of State.movementGroup) {
-                State.setUnit(unitId, 'inMovementGroup', false);
+                _setInMovementGroup(unitId, false);
             }
             State.movementGroup = [];
             State.movementStackHex = null;
             UIState.removeButton('DoubleTime');
             UIState.removeButton('AssaultMovement');
+            UIState.removeButton('PlaceSmoke');
 
             return;
         }
     },
-    DefensiveFirstFire: (ctx) => {
-        // Здесь должна быть логика атаки, которая использует State.fireGroup и ctx.unitId
+    
+    DefensiveFirstFire: async (ctx) => {
+        const targetHex = pixelToHex(ctx.pos.x, ctx.pos.y);
+        const initialMovedTargets = _movedTargetsInHex(targetHex);
+        if (initialMovedTargets.length === 0) return;
+
+        const firegroupUnits = State.fireGroup.map(id => State.units[id]);
+
+        // 3.3.3: тот же стрелок не может стрелять по той же цели в том же гексе если MF<2
+        if (_illegal_targets(initialMovedTargets, firegroupUnits)) {
+            console.log('Rule 3.3.3: same shooter → same target in same hex with MF<2 — отклонено');
+            return;
+        }
+
+        // Отсеиваем хексы стрелков без LoS/hindrance, разбиваем оставшиеся на adjacency-компоненты (sub-FGs)
+        const validHexes = Rules.filter_hexes_with_Los(State.fireGroupHexesArray, targetHex);
+        console.log(`[DFF] valid ${validHexes.length}/${State.fireGroupHexesArray.length} shooter hexes`);
+
+        // Всегда рисуем LoS-линии от всех стрелков FG и точку блока (если был),
+        // даже если не будет ни одного валидного sub-FG.
+        // Зелёные — LoS открыт, красные — заблокирован.
+        _drawLOS(State.fireGroupHexesArray, targetHex, validHexes);
+        const hit = getLastHit();
+        UIState.flashHitPoints(hit ? [hit] : []);
+
+        const firedUnits        = new Set();
+        const weaponsKeepingRoF = new Set();
+
+        for (const hexesArr of Rules.array_of_adjacent_Hexes_arrays(validHexes)) {
+            const subFG = firegroupUnits.filter(u => Rules.hexInList(u.hex, hexesArr));
+            if (subFG.length === 0) continue;
+
+            // Свежий список целей — предыдущая sub-FG могла кого-то eliminated/reduced
+            const movedTargets = _movedTargetsInHex(targetHex);
+            if (movedTargets.length === 0) break;
+
+            console.log(`[DFF] sub-FG hexes=${hexesArr.map(h=>`(${h.col},${h.row})`).join(',')} units=${subFG.map(u=>u.id).join(',')}`);
+
+            const result = Rules.defensiveFF(subFG, targetHex, movedTargets, State.units);
+            if (result === null) continue;   // SFF/FPF нарушено для этой sub-FG — пропускаем
+
+            subFG.forEach(u => firedUnits.add(u.id));   // отмечаем реально стрелявших
+            for (const id of result.weaponsKeepingRoF) weaponsKeepingRoF.add(id);   // аккумулируем weapons с сохранённым RoF
+            await _apply_changes_for_targets(result.changes);
+            _recordFiredFrom(subFG, movedTargets);
+        }
+
+        // Финал: firingStatus counters — только тем, кто реально стрелял (weapons с RoF сохраняют статус)
+        firegroupUnits.forEach(u => {
+            if (!firedUnits.has(u.id)) return;
+            if (weaponsKeepingRoF.has(u.id)) return;   // RoF сохранил — не крутим счётчик
+            if (u.firingStatus === undefined) return;
+            if (u.firingStatus === 'FirstFire') {
+                State.setUnit(u.id, 'firingStatus', 'FinalFire');
+            } else if (u.firingStatus === ' ') {
+                State.setUnit(u.id, 'firingStatus', 'FirstFire');
+            }
+        });
+
+        State.fireGroup.forEach(id => State.setUnit(id, 'inFireGroup', false));
+        State.fireGroup = [];
+        State.fireGroupHexesArray = [];
     },
+
     NextPhase: () => {
         // заглушка — позже здесь PhaseManager.next() + обновление UIState под новую фазу
     },
@@ -112,6 +181,198 @@ const handlers = {
         UIState.removeButton('AssaultMovement');
         UIState.removeButton('DoubleTime');
     },
+    PlaceSmoke: () => {
+        if (!Rules.checkIfPlaceSmokeForMovementGroupIsValid(State.movementGroup, State.units)) return;
+        State.movementGroup.forEach(id => _expend_mf(id, 1));
+        console.log('smoke placed');
+        UIState.removeButton('PlaceSmoke');
+    },
+}
+
+// Централизованная трата MF — любое действие, расходующее MF юнита
+// (движение, дым и т.д.). Обновляет mf, накапливает mf_spent_in_current_hex
+// и сбрасывает историю огня.
+function _expend_mf(unitId, cost) {
+    const u = State.units[unitId];
+    State.setUnit(unitId, 'mf', u.mf - cost);
+    State.setUnit(unitId, 'mf_spent_in_current_hex', u.mf_spent_in_current_hex + cost);
+    State.setUnit(unitId, 'hasStartedMoving', true);
+    State.fired_from_on_target_in_hex = {};
+    State.mfspent = true;
+
+    // юнит потративший MF становится валидной целью DFF (правило 3.3.3)
+    if (!State.moved_movement_group) State.moved_movement_group = [];
+    if (!State.moved_movement_group.includes(unitId)) State.moved_movement_group.push(unitId);
+}
+
+// Проверка ограничений на огонь по конкретной цели:
+//   3.3.3 — количество выстрелов из одного гекса по одной цели не может превышать
+//           MF, потраченные целью на вход в текущий гекс.
+//   3.2.2 — юниты в одном гексе, атакующие одну цель, обязаны стрелять как одна FG.
+//           Т.е. новый юнит из того же гекса не может присоединиться после того,
+//           как из этого гекса уже стреляли по этой цели без него.
+// Возвращает true если хоть одно ограничение нарушено — атака запрещена целиком.
+function _illegal_targets(targets, firegroupUnits) {
+    for (const shooter of firegroupUnits) {
+        const shooterLabel = hexLabel(shooter.hex.col, shooter.hex.row);
+        const record = State.fired_from_on_target_in_hex[shooterLabel] || {};
+
+        for (const t of targets) {
+            const entry = record[t.id];
+            if (!entry) continue;   // из этого гекса по этой цели ещё не стреляли — пропускаем
+
+            // 3.3.3: количество выстрелов уже равно MF цели → больше нельзя
+            if (entry.count >= t.mf_spent_in_current_hex) return true;
+
+            // 3.2.2: сепаратная атака — в текущей FG есть юнит из этого гекса,
+            // которого не было в оригинальной группе стрелявших
+            const shootersFromThisHex = firegroupUnits
+                .filter(f => hexLabel(f.hex.col, f.hex.row) === shooterLabel)
+                .map(f => f.id);
+            const isSeparateAttack = shootersFromThisHex.some(id => !entry.firers.includes(id));
+            if (isSeparateAttack) return true;
+        }
+    }
+    return false;
+}
+
+// После успешного огня — обновить историю:
+//   для каждого стрелка (по его гексу) и каждой цели инкрементим count и
+//   добавляем id стрелка в список firers, если его там ещё нет.
+function _recordFiredFrom(firegroupUnits, hexUnits) {
+    firegroupUnits.forEach(shooter => {
+        const label = hexLabel(shooter.hex.col, shooter.hex.row);
+        if (!State.fired_from_on_target_in_hex[label]) State.fired_from_on_target_in_hex[label] = {};
+        hexUnits.forEach(t => {
+            const entry = State.fired_from_on_target_in_hex[label][t.id] || { count: 0, firers: [] };
+            entry.count++;
+            if (!entry.firers.includes(shooter.id)) entry.firers.push(shooter.id);
+            State.fired_from_on_target_in_hex[label][t.id] = entry;
+        });
+    });
+}
+
+// нарисовать LOS-линии от каждого стрелка к центру targetHex
+function _drawLOS(shooterHexes, targetHex, validHexes) {
+    const targetCenter = hexToPixel(targetHex.col, targetHex.row);
+    shooterHexes.forEach(h => {
+        const isValid = validHexes.some(v => v.col === h.col && v.row === h.row);
+        UIState.flashLOS(
+            hexToPixel(h.col, h.row),
+            targetCenter,
+            isValid ? 'lime' : 'red'
+        );
+    });
+}
+
+// удалить юнит из игры (Konva + State)
+function _remove_unit(unitId) {
+    const u = State.units[unitId];
+    if (!u) return;
+    const hexOfDead = u.hex;   // запомнить чтобы перепозиционировать weapons после удаления
+    const layer = u.node.getLayer();
+    u.node.destroy();
+    delete State.units[unitId];
+    State.movementGroup = State.movementGroup.filter(x => x !== unitId);
+    if (State.movementGroup.length === 0) {
+        State.movementStackHex = null;
+    }
+    State.fireGroup = State.fireGroup.filter(x => x !== unitId);
+    if (State.moved_movement_group) {
+        State.moved_movement_group = State.moved_movement_group.filter(x => x !== unitId);
+    }
+
+    // Possessed weapons убитого юнита — падают на землю (drop):
+    // сбрасываем possessorId, снимаем рамки MG/FG, вычёркиваем из State.fireGroup
+    Object.values(State.units).forEach(w => {
+        if (w.category !== 'carried' || w.possessorId !== unitId) return;
+        State.setUnit(w.id, 'possessorId', null);
+        State.setUnit(w.id, 'inMovementGroup', false);
+        State.setUnit(w.id, 'inFireGroup', false);
+        State.fireGroup = State.fireGroup.filter(x => x !== w.id);
+    });
+
+    // Перепозиционировать хекс — unpossessed weapons уйдут в низ стека по _stackOrder
+    if (hexOfDead) recalculateHex(hexOfDead);
+
+    layer?.batchDraw();
+}
+
+// заменить юнит на новый (по templateId) в том же гексе — с флип-анимацией.
+// Перед удалением капим статусы старого; после спавна применяем их к новому
+// (broken/DM/pinned/exhausted survivor должен сохраниться).
+function _replace_unit(oldId, newTemplateId, newId) {
+    const old = State.units[oldId];
+    if (!old) return;
+
+    const inherit = {
+        broken:            old.broken,
+        desperationMorale: old.desperationMorale,
+        pinned:            old.pinned,
+        exhausted:         old.exhausted,
+    };
+
+    const hex   = old.hex;
+    const layer = old.node.getLayer();
+
+    flipReplaceUnit(old.node, async () => {
+        _remove_unit(oldId);
+        const newUnit = await spawn_unit(newTemplateId, newId, hex, layer);
+        for (const [key, val] of Object.entries(inherit)) {
+            if (val) State.setUnit(newId, key, true);
+        }
+        return newUnit.node;
+    });
+}
+
+// применить changes от defensiveFF: { unitId: 'broken'|'pinned'|'eliminated'|'reduced'|'wounded' }
+async function _apply_changes_for_targets(changes) {
+    for (const [id, state] of Object.entries(changes)) {
+        // eliminated — юнит уничтожается физически
+        if (state === 'eliminated') {
+            _remove_unit(id);
+            await sleep(300);
+            continue;
+        }
+        // reduced — squad заменяется на свой half-squad
+        if (state === 'reduced') {
+            const u = State.units[id];
+            if (u?.halfSquad) _replace_unit(id, u.halfSquad, id);
+            await sleep(300);
+            continue;
+        }
+
+        // pinned/broken/wounded — поднять юнит наверх, затем флип
+        const u = State.units[id];
+        if (u) raiseToTop(u);
+        await sleep(150);
+
+        State.setUnit(id, state, true);
+        // Rules могли замутировать флаги — синкаем через State.setUnit чтобы Renderer их подхватил
+        if (u?.desperationMorale) State.setUnit(id, 'desperationMorale', true);
+        // NMC-fail сбрасывает Pin и CX — синкаем чтобы Renderer убрал маркеры
+        // (только для infantry — у weapon нет pinned/exhausted)
+        if (u && state === 'broken' && u.category !== 'carried') {
+            State.setUnit(id, 'pinned',    u.pinned);
+            State.setUnit(id, 'exhausted', u.exhausted);
+        }
+        if ((state === 'pinned' || state === 'broken') && State.movementGroup.includes(id)) {
+            _setInMovementGroup(id, false);
+            State.movementGroup = State.movementGroup.filter(x => x !== id);
+            if (State.movementGroup.length === 0) {
+                State.movementStackHex = null;
+            }
+        }
+        await sleep(300);
+    }
+}
+
+// двинувшиеся юниты в targetHex — валидные цели Defensive First Fire
+function _movedTargetsInHex(targetHex) {
+    const moved = State.moved_movement_group || [];
+    return moved
+        .map(id => State.units[id])
+        .filter(u => u.hex.col === targetHex.col && u.hex.row === targetHex.row);
 }
 
 // Выполнить мув с возможным overrideTerrain (UseWoods='forest' / UseRoad='dirtRoad')
@@ -152,7 +413,7 @@ function _executeMove(targetHex, overrideTerrain) {
 function _clear_MG_if_all_completed() {
     if (!State.movementGroup.every(id => State.units[id].movementCompleted)) return;
 
-    State.movementGroup.forEach(id => State.setUnit(id, 'inMovementGroup', false));
+    State.movementGroup.forEach(id => _setInMovementGroup(id, false));
     State.movementGroup    = [];
     State.movementStackHex = null;
 }
@@ -160,8 +421,13 @@ function _clear_MG_if_all_completed() {
 // Применить результат arrangeMovement — per-unit изменения
 function _apply_movement_result_in_State_for_all_MG(result, targetHex, overrideTerrain) {
     const isRoad = Rules._isRoadHex(targetHex, overrideTerrain);
+    // 3.3.3: любая трата MF сбрасывает историю огня
+    State.fired_from_on_target_in_hex = {};
+
     Object.entries(result.unitChanges).forEach(([unitId, fields]) => {
         const u = State.units[unitId];
+        const cost = Rules.checkCost(targetHex, u.hex, overrideTerrain);
+        State.setUnit(unitId, 'mf_spent_in_current_hex', cost);
         State.setUnit(unitId, 'path',              [...u.path, { hex: targetHex, isRoad }]);
         State.setUnit(unitId, 'mf',                fields.mf);
         State.setUnit(unitId, 'hex',               targetHex);
@@ -169,6 +435,13 @@ function _apply_movement_result_in_State_for_all_MG(result, targetHex, overrideT
         State.setUnit(unitId, 'roadBonus',         fields.roadBonus);
         State.setUnit(unitId, 'hasStartedMoving',  fields.hasStartedMoving);
         State.setUnit(unitId, 'movementCompleted', fields.movementCompleted);
+
+        // Possessed carried едут с possessor'ом
+        Object.values(State.units).forEach(w => {
+            if (w.category === 'carried' && w.possessorId === unitId) {
+                State.setUnit(w.id, 'hex', targetHex);
+            }
+        });
     });
 }
 
@@ -196,7 +469,7 @@ function _finalize_unfinished_previous_MG() {
         State.moved_movement_group.forEach(id => {
             State.setUnit(id, 'mf', 0);
             State.setUnit(id, 'movementCompleted', true);
-            State.setUnit(id, 'inMovementGroup', false);
+            _setInMovementGroup(id, false);
         });
         State.moved_movement_group = null;
     }
@@ -209,7 +482,7 @@ function _finalize_unfinished_previous_MG() {
         if (State.splitted_group.includes(u.id))  return;
         State.setUnit(u.id, 'mf', 0);
         State.setUnit(u.id, 'movementCompleted', true);
-        State.setUnit(u.id, 'inMovementGroup', false);
+        _setInMovementGroup(u.id, false);
     });
 }
 
@@ -218,8 +491,26 @@ function _create_moved_movement_group_in_State() {
     State.moved_movement_group = [...State.movementGroup];
 }
 
+// Синхронно ставит/снимает inMovementGroup у юнита И всех его possessed carried
+function _setInMovementGroup(unitId, value) {
+    State.setUnit(unitId, 'inMovementGroup', value);
+    Object.values(State.units).forEach(u => {
+        if (u.category === 'carried' && u.possessorId === unitId) {
+            State.setUnit(u.id, 'inMovementGroup', value);
+        }
+    });
+}
+
 function _addToMovementGroup(unitId) {
-    const unit = State.units[unitId];
+    let unit = State.units[unitId];
+
+    // Клик по carried → редиректим на possessor'а (weapon сам не добавляется в MG,
+    // но при добавлении possessor'а подсветится через _setInMovementGroup)
+    if (unit?.category === 'carried' && unit.possessorId) {
+        unitId = unit.possessorId;
+        unit   = State.units[unitId];
+    }
+
     const activeSide = PhaseManager.getActiveSide();
 
     // Если movementStackHex не установлен, записываем гекс текущего юнита
@@ -232,7 +523,7 @@ function _addToMovementGroup(unitId) {
     }
     if (!State.movementGroup.includes(unitId)) {
         State.movementGroup.push(unitId);
-        State.setUnit(unitId, 'inMovementGroup', true);
+        _setInMovementGroup(unitId, true);
 
         if (Rules.checkIfDoubleTimeForMovementGroupIsValid(State.movementGroup, State.units)) {
             UIState.addButton('DoubleTime', { x: 10, y: 100, label: 'DoubleTime' });
@@ -244,6 +535,12 @@ function _addToMovementGroup(unitId) {
             UIState.addButton('AssaultMovement', { x: 10, y: 140, label: 'AssaultMovement' });
         } else {
             UIState.removeButton('AssaultMovement');
+        }
+
+        if (Rules.checkIfPlaceSmokeForMovementGroupIsValid(State.movementGroup, State.units)) {
+            UIState.addButton('PlaceSmoke', { x: 10, y: 260, label: 'PlaceSmoke' });
+        } else {
+            UIState.removeButton('PlaceSmoke');
         }
     }
 }
@@ -258,6 +555,11 @@ function _addToFireGroup(unitId) {
     if (!State.fireGroup.includes(unitId)) {
         State.fireGroup.push(unitId);
         State.setUnit(unitId, 'inFireGroup', true);
+
+        const key = `${unit.hex.col},${unit.hex.row}`;
+        if (!State.fireGroupHexesArray.some(h => `${h.col},${h.row}` === key)) {
+            State.fireGroupHexesArray.push({ col: unit.hex.col, row: unit.hex.row });
+        }
     }
 }
 

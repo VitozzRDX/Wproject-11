@@ -16,4 +16,12 @@ export const UIState = {
     subscribe(handler) {
         this.subscribers.push(handler);
     },
+
+    flashLOS(from, to, color) {
+        this.subscribers.forEach(sub => sub('flashLOS', null, { from, to, color }));
+    },
+
+    flashHitPoints(points) {
+        this.subscribers.forEach(sub => sub('flashHitPoints', null, points));
+    },
 }

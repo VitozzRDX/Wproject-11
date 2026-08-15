@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>Extract terrain contours to JSON</title>
+<style>
+  body { font-family: monospace; background: #222; color: #eee; padding: 20px; }
+  button { padding: 10px 20px; font-size: 14px; cursor: pointer; }
+  #status { margin-top: 20px; white-space: pre-wrap; }
+  canvas { display: none; }
+</style>
+</head>
+<body>
+
+<h1>Contour extractor</h1>
+<p>Проходит по PNG-файлам каждой карты, собирает пиксели с alpha &gt; 0 в <b>локальных</b> координатах,
+дампит вложенный JSON <code>terrainPixels.json</code>.</p>
+
+<button id="run">Extract</button>
+<div id="status"></div>
+<canvas id="c"></canvas>
+
+<script>
+// Каждая карта — свой набор PNG и своё смещение в мировых координатах.
+// Пиксели хранятся в ЛОКАЛЬНЫХ координатах, переставить карту = поменять xOffset/yOffset.
+const cards = {
+    v: {
+        xOffset: 0, yOffset: 0,
+        files: {
+            woods:     './graf/woods_outline.png',
+            buildings: './graf/buildings_outline.png',
+            hills:     './graf/hills_outline_1.png',
+            orchard:   './graf/orchard_outline_1.png',
+            brush:     './graf/brush_outline.png',
+        },
+    },
+    u: {
+        xOffset: -1800, yOffset: 0,
+        files: {
+            woods:     './graf/bdu_woods_outline.png',
+            buildings: './graf/bdu_buildings_outline.png',
+            hills:     './graf/bdu_hills_outline.png',
+            orchard:   './graf/bdu_orchard_outline.png',
+            brush:     './graf/bdu_brush_outline.png',
+        },
+    },
+};
+
+// Отдельная конфигурация для дорог — дампится в roadPixels.json
+const roadCards = {
+    v: {
+        xOffset: 0, yOffset: 0,
+        files: {
+            roads: './graf/roads_outline.png',
+        },
+    },
+};
+
+const status = document.getElementById('status');
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+
+function loadImage(src) {
+    return new Promise((resolve, reject) => {
+        const img = new Image();
+        img.onload = () => resolve(img);
+        img.onerror = () => reject(new Error(`Failed to load ${src}`));
+        img.src = src;
+    });
+}
+
+async function extract(name, src) {
+    const img = await loadImage(src);
+    canvas.width = img.width;
+    canvas.height = img.height;
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.drawImage(img, 0, 0);
+    const data = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
+    const pixels = [];
+    for (let y = 0; y < canvas.height; y++) {
+        for (let x = 0; x < canvas.width; x++) {
+            const alpha = data[(y * canvas.width + x) * 4 + 3];
+            if (alpha > 0) pixels.push([x, y]);
+        }
+    }
+    status.textContent += `  ${name}: ${pixels.length} pixels (${img.width}x${img.height})\n`;
+    return pixels;
+}
+
+async function extractAll(cfg) {
+    const result = {};
+    for (const [cardName, card] of Object.entries(cfg)) {
+        status.textContent += `\nКарта ${cardName} (offset ${card.xOffset}, ${card.yOffset}):\n`;
+        const cardData = { xOffset: card.xOffset, yOffset: card.yOffset };
+        for (const [terrainName, src] of Object.entries(card.files)) {
+            try {
+                cardData[terrainName] = await extract(terrainName, src);
+            } catch (e) {
+                status.textContent += `  ОШИБКА ${terrainName}: ${e.message}\n`;
+                cardData[terrainName] = [];
+            }
+        }
+        result[cardName] = cardData;
+    }
+    return result;
+}
+
+function downloadJson(obj, filename) {
+    const json = JSON.stringify(obj);
+    const blob = new Blob([json], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    a.click();
+    URL.revokeObjectURL(url);
+    status.textContent += `Скачан ${filename} (${Math.round(json.length / 1024)} KB)\n`;
+}
+
+document.getElementById('run').addEventListener('click', async () => {
+    status.textContent = 'Работаю над terrainPixels...\n';
+    const terrainRes = await extractAll(cards);
+    downloadJson(terrainRes, 'terrainPixels.json');
+
+    status.textContent += '\nРаботаю над roadPixels...\n';
+    const roadRes = await extractAll(roadCards);
+    downloadJson(roadRes, 'roadPixels.json');
+
+    status.textContent += '\nГотово.\n';
+});
+</script>
+</body>
+</html>

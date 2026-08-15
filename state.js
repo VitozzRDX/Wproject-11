@@ -3,12 +3,14 @@ export const State = {
     units: {},
     mfspent: false,
     fireGroup: [],
+    fireGroupHexesArray: [],       // уникальные хексы стрелков FG
     movementGroup: [],
     movementStackHex: null,
     original_group: [],            // снимок mg при последнем Esc
     splitted_group: [],            // оставшиеся "в ожидании" при дроблении
     moved_movement_group: null,    // последний реально двинувшийся стек
     pendingMove: null,             // отложенный мув (Woods-Road: ждём UseWoods/UseRoad)
+    fired_from_on_target_in_hex: {},   // { shooterHex: { targetId: targetHexAtFireTime } } — правило 3.3.3
 
     // массив подписчиков (Positioning, Renderer и т.д.)
     subscribers: [],

@@ -9,7 +9,10 @@ function createContext(e) {
     const buttonLabel = e.target.getParent()?.getAttr('buttonLabel'); // label кнопки UI (атрибут на группе)
     const button      = e.evt.button;                                 // кнопка мыши: 0=left, 2=right
     const shiftKey    = e.evt.shiftKey;                               // зажат ли шифт
-    const pos         = e.target.getStage().getPointerPosition();     // координаты клика
+    // мировые координаты клика (учитываем сдвиг stage от скроллинга WASD)
+    const stage       = e.target.getStage();
+    const raw         = stage.getPointerPosition();
+    const pos         = { x: raw.x - stage.x(), y: raw.y - stage.y() };
 
     return { unitId, buttonLabel, button, shiftKey, pos };
 }
@@ -55,6 +58,12 @@ const RULES = [
     },
     {
         requiresAny: [
+            { isButton: ctx => ctx.buttonLabel === 'PlaceSmoke' }
+        ],
+        name: 'PlaceSmoke'
+    },
+    {
+        requiresAny: [
             { isButton: ctx => ctx.buttonLabel === 'UseWoods' }
         ],
         name: 'UseWoods'
@@ -73,17 +82,16 @@ const RULES = [
                 leftClick:       ctx => ctx.button !== 2,
                 hasUnit:   ctx => ctx.unitId !== undefined,
                 clickedSideIsAttacker: ctx => State.units[ctx.unitId].nation === PhaseManager.getActiveSide(),
-                movingGroupIsEmpty: () => {
-                    return State.movementGroup.length === 0; }
+                movingGroupIsEmpty: () => State.movementGroup.length === 0,
+                fireGroupIsEmpty:   () => State.fireGroup.length === 0,
             },
             {
-                //shiftClick:       ctx => ctx.button !== 2 && ctx.shiftKey,
                 shift :       ctx => ctx.shiftKey,
                 leftClick:       ctx => ctx.button !== 2,
                 hasUnit:   ctx => ctx.unitId !== undefined,
                 clickedSideIsAttacker: ctx => State.units[ctx.unitId].nation === PhaseManager.getActiveSide(),
-                movingGroupIsNotEmpty: () => {
-                    return State.movementGroup.length > 0; }
+                movingGroupIsNotEmpty: () => State.movementGroup.length > 0,
+                fireGroupIsEmpty:      () => State.fireGroup.length === 0,
             }
         ],
         name:'addToMovingGroup'

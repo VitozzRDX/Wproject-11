@@ -3,10 +3,10 @@
 // ---------------------------------------------------------------------------
 
 /** Outer radius (center → vertex), px */
- const R = 112 / 3;
+ export const R = 112 / 3;
 
 /** Half horizontal step, px */
- const RX = 37.35;
+ const RX = 37.30;
 
 /** Full hex height = vertical distance between adjacent row centers, px */
  const HEX_H = Math.sqrt(3) * R;
@@ -22,7 +22,12 @@
 // ---------------------------------------------------------------------------
 
 /** World-pixel X of hex A1 (column 0, row 1) center */
- const GRID_OFFSET_X = RX - COL_STEP / 2 - 5;
+ const GRID_OFFSET_X = 1.32;   // подкручиваем вручную под карту
+
+/** Квадратичный коэффициент разбега вправо (col > 0) */
+ const DRIFT_COEF = 0.005;
+/** Квадратичный коэффициент разбега влево (col < 0) */
+ const DRIFT_COEF_LEFT = 0.010;
 
 /** World-pixel Y of hex A1 (column 0, row 1) center */
  const GRID_OFFSET_Y = HEX_H / 2 - 2;
@@ -44,24 +49,35 @@ export const ROW_COUNT = Math.ceil(WORLD_H / HEX_H);
 
 
 export function pixelToHex(px, py) {
-  const col = Math.round((px - GRID_OFFSET_X) / COL_STEP);
-  const clampedCol = Math.max(0, Math.min(COL_COUNT - 1, col));
-  const yAdjusted = py - GRID_OFFSET_Y - (clampedCol % 2 === 1 ? ODD_OFFSET : 0);
+  // линейная оценка + итеративная коррекция под квадратичный дрифт (со знаком)
+  let col = Math.round((px - GRID_OFFSET_X) / COL_STEP);
+  for (let iter = 0; iter < 3; iter++) {
+    const coef = col >= 0 ? DRIFT_COEF : DRIFT_COEF_LEFT;
+    const gridX = GRID_OFFSET_X + col * COL_STEP + col * Math.abs(col) * coef;
+    const dCol = Math.round((px - gridX) / COL_STEP);
+    if (dCol === 0) break;
+    col += dCol;
+  }
+  const clampedCol = Math.max(-COL_COUNT, Math.min(COL_COUNT - 1, col));
+  const isOdd = ((clampedCol % 2) + 2) % 2 === 1;
+  const yAdjusted = py - GRID_OFFSET_Y - (isOdd ? ODD_OFFSET : 0);
   const row = Math.round(yAdjusted / HEX_H) + 1;
   const clampedRow = Math.max(1, Math.min(ROW_COUNT, row));
   return { col: clampedCol, row: clampedRow };
 }
 
+// A-Z (0..25) → одна буква; далее AA, AB, AC, ... (последовательные)
 function colToLetters(col) {
   const alpha = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
   if (col < 26) return alpha[col];
-  const hi = Math.floor((col - 26) / 26);
-  const lo = (col - 26) % 26;
-  return alpha[hi] + alpha[lo];
+  return 'A' + alpha[col - 26];
 }
 
+// V-карта: col >= 0 → vA (col=0), vB, ..., vZ, vAA, ...
+// U-карта: col <  0 → uA (col=-COL_COUNT, левый край), ..., uGG (col=-1, правый край U)
 export function hexLabel(col, row) {
-  return colToLetters(col) + row;
+  if (col >= 0) return 'v' + colToLetters(col) + row;
+  return 'u' + colToLetters(COL_COUNT + col) + row;
 }
 
 // Соседи в odd-q offset раскладке (нечётные столбцы сдвинуты вниз)
@@ -98,7 +114,10 @@ export function hexDistance(a, b) {
 }
 
 export function hexToPixel(col, row) {
-  const x = GRID_OFFSET_X + col * COL_STEP;
-  const y = GRID_OFFSET_Y + (row - 1) * HEX_H + (col % 2 === 1 ? ODD_OFFSET : 0);
+  // раздельные коэффициенты влево/вправо, знак от col
+  const coef = col >= 0 ? DRIFT_COEF : DRIFT_COEF_LEFT;
+  const x = GRID_OFFSET_X + col * COL_STEP + col * Math.abs(col) * coef;
+  const isOdd = ((col % 2) + 2) % 2 === 1;
+  const y = GRID_OFFSET_Y + (row - 1) * HEX_H + (isOdd ? ODD_OFFSET : 0);
   return { x, y };
 }

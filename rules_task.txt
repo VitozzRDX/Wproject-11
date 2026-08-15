@@ -1,0 +1,89 @@
+3.2.2
+If Infantry in the same
+hex are going to attack the same unit, they must do
+so as a mandatory FG; they may not make sepa-
+rate attacks
+
+3.2.2
+A leader may use his leadership DRM to modi-
+fy the IFT DR of any one attacking Infantry unit
+(except a FT) or FG per Player Turn, provided all
+units of the FG are in the same hex. A leadership
+DRM may be applied to a multi-hex FG only if a
+leader directing that attack is present in every
+hex; the leadership DRM in effect in this condi-
+tion is that of the lowest quality participating
+leader.
+
+3.2.3 Pin
+During that turn units may not move, their FP is halved,
+and a pinned leader may not use his leadership DRM.
+Units cannot be pinned more than once per Player Turn.
+Any pinned Infantry may not Double Time.
+Unit that is pinned is not subject to any further FFNAM or FFMO while pinned
+
+3.2.3 Pin (on marginal MC pass)
+If an unbroken unit passes a required MC by exactly the highest number by which
+that unit could pass the MC (after all modification), then that unit is pinned,
+and a Pin counter is placed on that unit.
+
+3.2.3 MC:
+Each target unit must attempt to pass a Morale Check (MC) by making a DR less
+than or equal to the unit's morale level. The best leader in a hex must check first.
+An unpinned, Good Order leader will apply his leadership DRM to other units
+(including lower morale leaders) in the target location if he passes his MC
+unharmed, but not to himself.
+
+3.3.3
+A unit that survives a Defensive First Fire attack can be fired upon again in
+that same location during its MPh before expending additional MF, but only by
+different attackers or if it expended at least 2 MF/MP in that hex. The same
+unit or Weapon can never Fire on a moving unit in the same location more times
+than the number of MF/MP expended in that location during the MPh.
+
+3.3.3
+Any action that requires a unit to expend a MF or MP in a hex qualifies the
+unit as a target for Defensive First Fire
+
+2.0 Casualty Reduction
+A combat result that eliminates a HS or crew or wounds a SMC.
+A squad is reduced to a HS (3.2.3).
+
+3.3.3 Subsequent First Fire (SFF)
+A DEFENDER Infantry unit already marked with a First Fire counter may Defensive
+First Fire again with its own FP and/or MG during that MPh provided that the
+target is not at a range greater than that to the closest Known Enemy Unit, nor
+outside the firer's normal range. A unit thus using Subsequent First Fire (SFF)
+has its FP halved. After the attack is resolved, flip the First Fire counter
+over to its Final Fire side.
+
+3.3.3 Final Protective Fire (FPF)
+FPF is an option available to a DEFENDER Infantry unit already marked with a
+Final Fire counter which wishes to fire at adjacent or same hex moving units
+during the MPh. FPF is treated as Subsequent First Fire (with the FP also
+doubled due to the effects of PBF) with an additional penalty; immediately
+after normally resolving the attack, the original IFT DR (modified only by
+applicable leadership DRM) is used as a NMC against the units using FPF
+(including any directing leader). Provided it does not break, there is no
+limit to the number of FPF attacks a unit may make, other than the number of
+moving units and the MF/MP they expend in the adjacent or the firer's hex.
+A unit using FPF must use all its FP and usable MG (or IFE) and may form a FG
+with units not using FPF, but only those units using FPF are affected by its
+adverse effects.
+
+3.2.3 Leader Loss Task Check (LLTC)
+If a leader breaks, all Good Order units with a lower current morale level
+stacked with him and not in CC must take a PTC after resolving the initial
+attack, with any negative leadership DRM added to the DR rather than subtracted
+from it. This is a Leader Loss Task Check (LLTC).
+
+3.2.3 Leader Loss Morale Check (LLMC)
+If a leader is eliminated, all units with a lower current morale level stacked
+with him and not in CC must take a NMC after resolving the initial attack, with
+any negative leadership DRM added to the DR rather than subtracted from it.
+This is a Leader Loss Morale Check (LLMC).
+
+3.2.3 NMC (broken units)
+An already broken unit that fails a MC suffers Casualty Reduction; an already
+broken unit that rolls an original 12 on a MC is eliminated.
+Broken units use the morale level printed on their broken side for all MC.

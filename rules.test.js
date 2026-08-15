@@ -27,11 +27,12 @@ describe('arrangeMovement', () => {
   });
 
   test('null если не хватает MF (target = forest, cost=2, у юнита mf=1)', () => {
-    const u = makeUnit('a', { col: 0, row: 3 }, 1);
+    // world (32, 4) → local A7 = forest на повёрнутой V-карте
+    const u = makeUnit('a', { col: 32, row: 3 }, 1);
     const result = Rules.arrangeMovement({
       movementGroup: ['a'],
       units:         { a: u },
-      targetHex:     { col: 0, row: 4 },
+      targetHex:     { col: 32, row: 4 },
     });
     expect(result).toBeNull();
   });
@@ -53,11 +54,11 @@ describe('arrangeMovement', () => {
   });
 
   test('cost от террейна — forest=2', () => {
-    const u = makeUnit('a', { col: 0, row: 3 }, 4);
+    const u = makeUnit('a', { col: 32, row: 3 }, 4);
     const result = Rules.arrangeMovement({
       movementGroup: ['a'],
       units:         { a: u },
-      targetHex:     { col: 0, row: 4 },
+      targetHex:     { col: 32, row: 4 },
     });
     expect(result.unitChanges.a.mf).toBe(2);
   });
@@ -121,13 +122,13 @@ describe('arrangeMovement', () => {
 
   test('leader bonus реактивный: при mf=1 cost=2 → бонус тратится, mf=0, leaderBonus=1', () => {
     // squad mf=1, cost=2 (forest) → m=-1 → leaderBonus -1
-    const startHex = { col: 0, row: 3 };
+    const startHex = { col: 32, row: 3 };
     const squad  = { id: 'sq', hex: startHex, mf: 1, nation: 'german', type: 'squad', path: [{ hex: startHex, isRoad: false }], leaderBonus: 2, roadBonus: 1 };
     const leader = { id: 'ld', hex: startHex, mf: 6, nation: 'german', type: 'leader', path: [{ hex: startHex, isRoad: false }], leaderBonus: 0, roadBonus: 1 };
     const result = Rules.arrangeMovement({
       movementGroup: ['sq', 'ld'],
       units:         { sq: squad, ld: leader },
-      targetHex:     { col: 0, row: 4 },
+      targetHex:     { col: 32, row: 4 },
     });
     expect(result.unitChanges.sq.mf).toBe(0);
     expect(result.unitChanges.sq.leaderBonus).toBe(1);
@@ -135,13 +136,13 @@ describe('arrangeMovement', () => {
   });
 
   test('leader bonus не доступен (leaderBonus=0): mf=1, cost=2 → null', () => {
-    const startHex = { col: 0, row: 3 };
+    const startHex = { col: 32, row: 3 };
     const squad  = { id: 'sq', hex: startHex, mf: 1, nation: 'german', type: 'squad', path: [{ hex: startHex, isRoad: false }], leaderBonus: 0, roadBonus: 1 };
     const leader = { id: 'ld', hex: startHex, mf: 6, nation: 'german', type: 'leader', path: [{ hex: startHex, isRoad: false }], leaderBonus: 0, roadBonus: 1 };
     const result = Rules.arrangeMovement({
       movementGroup: ['sq', 'ld'],
       units:         { sq: squad, ld: leader },
-      targetHex:     { col: 0, row: 4 },
+      targetHex:     { col: 32, row: 4 },
     });
     expect(result).toBeNull();
   });
