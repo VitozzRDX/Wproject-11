@@ -10,7 +10,11 @@ export const State = {
     splitted_group: [],            // оставшиеся "в ожидании" при дроблении
     moved_movement_group: null,    // последний реально двинувшийся стек
     pendingMove: null,             // отложенный мув (Woods-Road: ждём UseWoods/UseRoad)
+    pendingSmoke: false,           // выбран PlaceSmoke, ждём клик по хексу (свой = 1 MF, соседний = 2 MF)
     fired_from_on_target_in_hex: {},   // { shooterHex: { targetId: targetHexAtFireTime } } — правило 3.3.3
+    residualFP: {},                    // { "col,row": fp } — Residual FP counters по хексам (3.3.5)
+    dynamicTerrain: {},                // { "col,row": ['smoke', ...] } — runtime terrain overlay
+    elr: { german: 3, soviet: 3 },     // Experience Level Rating по силе (5.1)
 
     // массив подписчиков (Positioning, Renderer и т.д.)
     subscribers: [],
@@ -39,3 +43,6 @@ export const State = {
         this.subscribers.push(handler);
     },
 }
+
+// DEBUG: экспорт в глобал для удобной отладки из DevTools Console
+if (typeof window !== 'undefined') window.State = State;

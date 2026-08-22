@@ -2,7 +2,7 @@ import { State } from './state.js';
 
 // Анимация флипа юнита на broken-сторону
 function flipRendering(node, unit) {
-    const x0 = node.x();
+    const x0 = unit.x;                // стабильная target-позиция из state — защищает от race с pos-tween
     const w  = node.findOne('Image').width();
     const cx = x0 + w / 2;
 
@@ -22,20 +22,27 @@ export function raiseToTop(unit) {
 }
 
 // Флип с заменой: старая нода сжимается, вызывается onMidflip (там Engine
-// удаляет старую и создаёт новую), затем новая разжимается на том же месте.
+// удаляет старую и создаёт новую), затем новая разжимается на её target-позиции из state.
+// .to() — метод Konva.Node для анимации свойств: плавно интерполирует свойства ноды от
+// текущих значений к указанным за duration секунд, вызывая onFinish в конце.
 export function flipReplaceUnit(oldNode, onMidflip) {
-    const x0 = oldNode.x();
-    const w  = oldNode.findOne('Image').width();
-    const cx = x0 + w / 2;
+    const x0Old = oldNode.x();
+    const w     = oldNode.findOne('Image').width();
+    const cxOld = x0Old + w / 2;
 
     oldNode.to({
-        x: cx, scaleX: 0, duration: 0.15,
+        x: cxOld, scaleX: 0, duration: 0.15,
         onFinish: async () => {
             const newNode = await onMidflip();
             if (!newNode) return;
+            // Target-позиция новой ноды берётся из state (после recalculateHex она правильная).
+            // Иначе flip-tween затёр бы pos-tween от positioning.
+            const newUnit = State.units[newNode.getAttr('unitId')];
+            const x0New   = newUnit ? newUnit.x : x0Old;
+            const cxNew   = x0New + w / 2;
             newNode.scaleX(0);
-            newNode.x(cx);
-            newNode.to({ x: x0, scaleX: 1, duration: 0.15 });
+            newNode.x(cxNew);
+            newNode.to({ x: x0New, scaleX: 1, duration: 0.15 });
         }
     });
 }

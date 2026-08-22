@@ -24,4 +24,12 @@ export const UIState = {
     flashHitPoints(points) {
         this.subscribers.forEach(sub => sub('flashHitPoints', null, points));
     },
+
+    setResidualFP(hex, fp) {
+        this.subscribers.forEach(sub => sub('setResidualFP', null, { hex, fp }));
+    },
+
+    setSmoke(hex) {
+        this.subscribers.forEach(sub => sub('setSmoke', null, { hex }));
+    },
 }
