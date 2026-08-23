@@ -92,6 +92,8 @@ const handlers = {
             UIState.removeButton('DoubleTime');
             UIState.removeButton('AssaultMovement');
             UIState.removeButton('PlaceSmoke');
+            UIState.removeButton('Drop');
+            UIState.removeButton('Recover');
 
             return;
         }
@@ -190,10 +192,59 @@ const handlers = {
         UIState.removeButton('AssaultMovement');
         UIState.removeButton('DoubleTime');
     },
+    Drop: () => {
+        if (!Rules.checkDropCapability(State.movementGroup, State.units)) return;
+        for (const posId of State.movementGroup) {
+            let dropped = false;
+            Object.values(State.units).forEach(unit => {
+                if (unit.category !== 'carried' || unit.possessorId !== posId) return;
+                State.setUnit(unit.id, 'possessorId', null);
+                State.setUnit(unit.id, 'movedThisMPh', true);
+                State.setUnit(unit.id, 'inMovementGroup', false);
+                dropped = true;
+            });
+            if (dropped) recalculateHex(State.units[posId].hex);
+        }
+        UIState.removeButton('Drop');
+    },
+
     PlaceSmoke: () => {
         State.pendingSmoke = true;
         console.log('[smoke] выбор хекса: свой (1 MF) или соседний (2 MF)');
         UIState.removeButton('PlaceSmoke');
+    },
+
+    Drop: () => {
+        if (!Rules.checkDropCapability(State.movementGroup, State.units)) return;
+        for (const posId of State.movementGroup) {
+            let dropped = false;
+            Object.values(State.units).forEach(w => {
+                if (w.category !== 'carried' || w.possessorId !== posId) return;
+                State.setUnit(w.id, 'possessorId', null);
+                State.setUnit(w.id, 'movedThisMPh', true);
+                State.setUnit(w.id, 'inMovementGroup', false);
+                dropped = true;
+            });
+            if (dropped) recalculateHex(State.units[posId].hex);
+        }
+        _refreshMGButtons();
+    },
+
+    Recover: () => {
+        const cand = Rules.findRecoverCandidate(State.movementGroup, State.units);
+        if (!cand) return;
+        const u = State.units[cand.unitId];
+
+        _expend_mf(cand.unitId, 1);
+
+        const { success } = Rules.rollRecoverAttempt(u);
+        if (success) {
+            State.setUnit(cand.weaponId, 'possessorId', cand.unitId);
+            State.setUnit(cand.weaponId, 'movedThisMPh', true);
+            State.setUnit(cand.weaponId, 'inMovementGroup', true);
+            recalculateHex(u.hex);
+        }
+        _refreshMGButtons();
     },
 
     PlaceSmokeTarget: (ctx) => {
@@ -502,6 +553,9 @@ async function _executeMove(targetHex, overrideTerrain) {
         UIState.removeButton('UseWoods');
         UIState.removeButton('UseRoad');
     }
+
+    // hex юнитов сменился → Recover eligibility могла появиться/пропасть
+    _refreshMGButtons();
 }
 
 // Авто-очистка movementGroup если все юниты реально закончили движение
@@ -633,24 +687,44 @@ function _addToMovementGroup(unitId) {
     if (!State.movementGroup.includes(unitId)) {
         State.movementGroup.push(unitId);
         _setInMovementGroup(unitId, true);
+        _refreshMGButtons();
+    }
+}
 
-        if (Rules.checkIfDoubleTimeForMovementGroupIsValid(State.movementGroup, State.units)) {
-            UIState.addButton('DoubleTime', { x: 10, y: 100, label: 'DoubleTime' });
-        } else {
-            UIState.removeButton('DoubleTime');
-        }
+// Централизованно пересчитывает состояние кнопок MG (DoubleTime/AssaultMovement/
+// PlaceSmoke/Drop/Recover). Вызывать после любого изменения MG: добавление юнита,
+// после мува (hex сменился), после Drop/Recover (possessed weapons изменились).
+function _refreshMGButtons() {
+    const mg = State.movementGroup;
 
-        if (Rules.checkIfAssaultMovementForMovementGroupIsValid(State.movementGroup, State.units)) {
-            UIState.addButton('AssaultMovement', { x: 10, y: 140, label: 'AssaultMovement' });
-        } else {
-            UIState.removeButton('AssaultMovement');
-        }
+    if (Rules.checkIfDoubleTimeForMovementGroupIsValid(mg, State.units)) {
+        UIState.addButton('DoubleTime', { x: 10, y: 100, label: 'DoubleTime' });
+    } else {
+        UIState.removeButton('DoubleTime');
+    }
 
-        if (Rules.checkIfPlaceSmokeForMovementGroupIsValid(State.movementGroup, State.units)) {
-            UIState.addButton('PlaceSmoke', { x: 10, y: 260, label: 'PlaceSmoke' });
-        } else {
-            UIState.removeButton('PlaceSmoke');
-        }
+    if (Rules.checkIfAssaultMovementForMovementGroupIsValid(mg, State.units)) {
+        UIState.addButton('AssaultMovement', { x: 10, y: 140, label: 'AssaultMovement' });
+    } else {
+        UIState.removeButton('AssaultMovement');
+    }
+
+    if (Rules.checkIfPlaceSmokeForMovementGroupIsValid(mg, State.units)) {
+        UIState.addButton('PlaceSmoke', { x: 10, y: 260, label: 'PlaceSmoke' });
+    } else {
+        UIState.removeButton('PlaceSmoke');
+    }
+
+    if (Rules.checkDropCapability(mg, State.units)) {
+        UIState.addButton('Drop', { x: 10, y: 300, label: 'Drop' });
+    } else {
+        UIState.removeButton('Drop');
+    }
+
+    if (Rules.findRecoverCandidate(mg, State.units)) {
+        UIState.addButton('Recover', { x: 10, y: 340, label: 'Recover' });
+    } else {
+        UIState.removeButton('Recover');
     }
 }
 

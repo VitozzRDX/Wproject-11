@@ -17,8 +17,8 @@ const Infantry         = { ...Unit, category: 'infantry',
                                     desperationMorale: false,
                                     mf_spent_in_current_hex: 0,
                                     smokeAttempted: false };   // сбрасывается в начале MPh (TODO при phase transitions)
-const Squad            = { ...Infantry, type: 'squad', mf: 4, leaderBonus: 2, firingStatus: ' ' };
-const Leader           = { ...Infantry, type: 'leader', mf: 6, quality: 'Elite' };
+const Squad            = { ...Infantry, type: 'squad', mf: 4, leaderBonus: 2, firingStatus: ' ', ipc: 3 };   // MMC
+const Leader           = { ...Infantry, type: 'leader', mf: 6, quality: 'Elite', ipc: 1 };                    // SMC
 const GermanSquad_1st  = { ...Squad,  nation: 'german', quality: '1stLine', selfRally: true  };
 const SovietSquad_Elite= { ...Squad,  nation: 'soviet', quality: 'Elite',   selfRally: true  };
 const GermanLeader     = { ...Leader, nation: 'german' };
@@ -27,7 +27,8 @@ const SovietLeader     = { ...Leader, nation: 'soviet' };
 // --- Ветвь: переносимые предметы (SW, guns) — требуют possessor ---
 const CarriedItem      = { ...Unit, category: 'carried',
                                     possessorId: null,
-                                    broken: false };      // weapon-jam / malfunction (B# сработал)
+                                    movedThisMPh: false,   // подобран/дропнут/пронесён в текущей MPh
+                                    broken: false };       // weapon-jam / malfunction (B# сработал)
 const SW               = { ...CarriedItem, type: 'SW', firingStatus: ' ' };
 const MG               = { ...SW, kind: 'MG' };
 
@@ -69,11 +70,14 @@ const TEMPLATES = {
 
   // --- Оружие ---
   'ru_LMG': { ...MG, nation: 'soviet', firepower: 2, range: 6,
-              breakdownNumber: 11, rof: 1, repairNumber: 2,
+              breakdownNumber: 11, rof: 1, repairNumber: 2, portagePoints: 1,
               src: './graf/ruLMG.gif', brokenSrc: './graf/ruLMGb.gif' },
   'ge_HMG': { ...MG, nation: 'german', firepower: 7, range: 16,
-              breakdownNumber: 12, rof: 3, repairNumber: 3,
+              breakdownNumber: 12, rof: 3, repairNumber: 3, portagePoints: 4,
               src: './graf/geHMG.gif', brokenSrc: './graf/geHMGb.gif' },
+  'ge_LMG': { ...MG, nation: 'german', firepower: 3, range: 8,
+              breakdownNumber: 12, rof: 1, repairNumber: 1, portagePoints: 1,
+              src: './graf/geLMG.gif', brokenSrc: './graf/geLMGb.gif' },
 };
 
 // ---------------------------------------------------------------------------
@@ -120,6 +124,8 @@ const scenario = [
   { templateId: 'ge_HMG', id: 'geHMG_vG3', possessorId: 'unit_06' },
   { templateId: 'ru_LMG', id: 'ruLMG_vG5', possessorId: 'unit_vG5' },
   { templateId: 'ru_LMG', id: 'ruLMG_vF7', possessorId: 'fg_r2_a1' },
+  { templateId: 'ge_LMG', id: 'geLMG_vF3', hex: { col: 5, row: 3 } },
+  { templateId: 'ge_LMG', id: 'geLMG_vF2', possessorId: 'unit_02' },
 ]
 
 function loadImage(src) {

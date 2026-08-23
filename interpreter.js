@@ -64,6 +64,24 @@ const RULES = [
     },
     {
         requiresAny: [
+            { isButton: ctx => ctx.buttonLabel === 'Drop' }
+        ],
+        name: 'Drop'
+    },
+    {
+        requiresAny: [
+            { isButton: ctx => ctx.buttonLabel === 'Recover' }
+        ],
+        name: 'Recover'
+    },
+    {
+        requiresAny: [
+            { isButton: ctx => ctx.buttonLabel === 'Drop' }
+        ],
+        name: 'Drop'
+    },
+    {
+        requiresAny: [
             { isButton: ctx => ctx.buttonLabel === 'UseWoods' }
         ],
         name: 'UseWoods'

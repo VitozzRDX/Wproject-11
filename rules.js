@@ -1041,12 +1041,38 @@ function mf_after_move(unit, targetHex, overrideTerrain = null) {
     return unit.mf - checkCost(targetHex, unit.hex, overrideTerrain);
 }
 
+// Portage penalty (4.0): PP possessed weapons сверх IPC → штраф MF.
+// Считается динамически при каждом move-check — drop/pickup оружия сразу меняет excess.
+function _portageExcess(u, units, mg = null) {
+    if (u.category !== 'infantry') return 0;
+    const possessedPP = Object.values(units)
+        .filter(w => w.category === 'carried' && w.possessorId === u.id)
+        .reduce((s, w) => s + (w.portagePoints ?? 0), 0);
+
+    // SMC contribution: каждый Good Order лидер в MG добавляет +1 IPC ПЕРВОМУ MMC в MG.
+    let smcBonus = 0;
+    if (mg && u.type === 'squad') {
+        const mmcsInMg = mg.filter(id => units[id].type === 'squad');
+        if (mmcsInMg[0] === u.id) {
+            smcBonus = mg.filter(id => {
+                const l = units[id];
+                return l.type === 'leader' && !l.broken && !l.pinned && !l.wounded;
+            }).length;
+        }
+    }
+    return Math.max(0, possessedPP - ((u.ipc ?? 0) + smcBonus));
+}
+
 // Новый mf после хода (с учётом реактивно потраченных бонусов).
 // null => "нет реакции" — двигаться нельзя.
 function calc_mf(u, targetHex, mg, units, overrideTerrain = null) {
-    const m = mf_after_move(u, targetHex, overrideTerrain);
+    const rawM   = mf_after_move(u, targetHex, overrideTerrain);
+    const excess = _portageExcess(u, units, mg);
+    // effective m: доступный MF (u.mf - excess) минус cost. По нему проверяем бонусы.
+    const m = rawM - excess;
 
-    if (m >= 0) return m;
+    // Возврат сырой u.mf - cost (без excess), чтобы не bakes penalty в u.mf → dynamic.
+    if (m >= 0) return rawM;
 
     if (m === -1 && lead_bonus_is_possible(u, mg, units))                                                return 0;
     if (m === -1 && !lead_bonus_is_possible(u, mg, units) && road_bonus_is_possible(targetHex, u, overrideTerrain) && u.leaderBonus ==1 )       return null;
@@ -1065,7 +1091,9 @@ function calc_mf(u, targetHex, mg, units, overrideTerrain = null) {
 
 // Остаток leaderBonus после хода
 function calc_leader_bonus(u, targetHex, mg, units, overrideTerrain = null) {
-    const m = mf_after_move(u, targetHex, overrideTerrain);
+    const rawM   = mf_after_move(u, targetHex, overrideTerrain);
+    const excess = _portageExcess(u, units, mg);
+    const m = rawM - excess;
 
     if (!hasLeader(mg, units))                  return u.leaderBonus;
     if (!lead_bonus_is_possible(u, mg, units))  return u.leaderBonus;
@@ -1080,7 +1108,9 @@ function calc_leader_bonus(u, targetHex, mg, units, overrideTerrain = null) {
 
 // Остаток roadBonus после хода
 function calc_road_bonus(u, targetHex, mg, units, overrideTerrain = null) {
-    const m = mf_after_move(u, targetHex, overrideTerrain);
+    const rawM   = mf_after_move(u, targetHex, overrideTerrain);
+    const excess = _portageExcess(u, units, mg);
+    const m = rawM - excess;
 
     if (m === -1 && road_bonus_is_possible(targetHex, u, overrideTerrain) && !hasLeader(mg, units))     return 0;
     if (m === -1 && road_bonus_is_possible(targetHex, u, overrideTerrain) && u.leaderBonus === 0)       return 0;
@@ -1184,19 +1214,53 @@ export const Rules = {
         return mg.every(id => this.checkAssaultMovementCapability(id, units));
     },
 
-    checkPlaceSmokeCapability(id, units) {
+    checkDropCapability(mg, units) {
+        return mg.some(id => Object.values(units).some(
+            unit => unit.category === 'carried' && unit.possessorId === id
+        ));
+    },
+
+    // Ищет пару (юнит из MG, оружие в его hex) для попытки Recover.
+    // MVP: первый годный юнит × первое годное оружие.
+    // Возвращает { unitId, weaponId } или null.
+    findRecoverCandidate(mg, units) {
+        for (const uid of mg) {
+            const u = units[uid];
+            if (u.category !== 'infantry') continue;   // carried сами не подбирают
+            if (u.mf < 1) continue;                    // на Recover нужен 1 MF
+            // Ищем в hex'e юнита unpossessed weapon, ещё не двигавшееся в этой MPh
+            const weapon = Object.values(units).find(w =>
+                w.category === 'carried' &&
+                w.possessorId === null &&
+                !w.movedThisMPh &&
+                w.hex?.col === u.hex.col && w.hex?.row === u.hex.row
+            );
+            if (weapon) return { unitId: uid, weaponId: weapon.id };
+        }
+        return null;
+    },
+
+    rollRecoverAttempt(u) {
+        const raw = _rollD6_();
+        const dr  = raw + (u.exhausted ? 1 : 0);
+        const success = dr < 6;
+        console.log(`[recover] ${u.id}: dr=${raw}${u.exhausted ? '+1 CX' : ''}=${dr} → ${success ? 'ok' : 'fail'}`);
+        return { success };
+    },
+
+    checkPlaceSmokeCapability(id, units, mg = null) {
         const u = units[id];
         if (u.type !== 'squad') return false;
         if (!u.smokeExponent)   return false;   // нет SE — не может размещать
         if (u.smokeAttempted)   return false;   // уже пытался в этом MPh
         if (u.broken || u.pinned || u.wounded || u.exhausted) return false;
-        if (u.mf < 1) return false;
+        if (u.mf - _portageExcess(u, units, mg) < 1) return false;
         return true;
     },
 
     checkIfPlaceSmokeForMovementGroupIsValid(mg, units) {
         if (mg.length === 0) return false;
-        return mg.some(id => this.checkPlaceSmokeCapability(id, units));   // хотя бы один способен → показываем кнопку
+        return mg.some(id => this.checkPlaceSmokeCapability(id, units, mg));   // хотя бы один способен → показываем кнопку
     },
 
     // Роллит dr для попытки размещения дыма каждым юнитом из mg.
@@ -1205,8 +1269,8 @@ export const Rules = {
         const results = {};
         for (const id of unitIds) {
             const u = units[id];
-            if (!this.checkPlaceSmokeCapability(id, units)) continue;
-            if (u.mf < mfCost) continue;
+            if (!this.checkPlaceSmokeCapability(id, units, unitIds)) continue;
+            if (u.mf - _portageExcess(u, units, unitIds) < mfCost) continue;
 
             const rawDr = _rollD6_();
             const drmDr = u.exhausted ? rawDr + 1 : rawDr;
@@ -1242,7 +1306,7 @@ export const Rules = {
             const u = ctx.units[id];
             if (!u.assaultMovement) continue;
             if (u.hasStartedMoving) return null;
-            if (u.mf - checkCost(ctx.targetHex, u.hex, overrideTerrain) <= 0) return null;
+            if (u.mf - checkCost(ctx.targetHex, u.hex, overrideTerrain) - _portageExcess(u, ctx.units, ctx.movementGroup) <= 0) return null;
         }
 
         let result = {};
@@ -1260,29 +1324,31 @@ export const Rules = {
             const u = ctx.units[id];
             const newPath = [...u.path, { hex: ctx.targetHex, isRoad: _isRoadHex(ctx.targetHex, overrideTerrain) }];
 
+            const effMf = result[id].mf - _portageExcess(u, ctx.units, ctx.movementGroup);
+
             result[id].movementCompleted = false;
 
-            if (result[id].mf === 0 &&
+            if (effMf <= 0 &&
                 !hasLeader(ctx.movementGroup, ctx.units) &&
                 !_all_path_is_road(newPath)) {
                 result[id].movementCompleted = true;
             }
 
-            if (result[id].mf === 0 &&
+            if (effMf <= 0 &&
                 !hasLeader(ctx.movementGroup, ctx.units) &&
                 _all_path_is_road(newPath) &&
                 result[id].roadBonus === 0) {
                 result[id].movementCompleted = true;
             }
 
-            if (result[id].mf === 0 &&
+            if (effMf <= 0 &&
                 hasLeader(ctx.movementGroup, ctx.units) &&
                 result[id].leaderBonus === 0 &&
                 !_all_path_is_road(newPath)) {
                 result[id].movementCompleted = true;
             }
 
-            if (result[id].mf === 0 &&
+            if (effMf <= 0 &&
                 hasLeader(ctx.movementGroup, ctx.units) &&
                 result[id].leaderBonus === 0 &&
                 _all_path_is_road(newPath) &&
