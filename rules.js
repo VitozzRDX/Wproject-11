@@ -108,12 +108,30 @@ function calcElevation(hex) {
     return (terrain.includes('hill') || terrain.includes('crestLine')) ? 1 : 0;
 }
 
-function calcHeightAdvantage(shooters, targetHex) {
-    if (shooters.length === 0) return 0;
-    const targetElev = calcElevation(targetHex);
-    const minShooterElev = Math.min(...shooters.map(u => calcElevation(u.hex)));
+function calcHeightAdvantage(shooterHexes, targetHex, hexUnits = []) {
+    if (shooterHexes.length === 0) return 0;
+    const targetElev     = calcElevation(targetHex);
+    const minShooterElev = Math.min(...shooterHexes.map(h => calcElevation(h)));
     if (minShooterElev >= targetElev) return 0;
     if (calcTEM(targetHex) > 0)       return 0;
+
+    // Exception (ASL): unit не получает HA если, входя в target-хекс, пересекает crest line
+    // через тот же hexside, что и firer's LoS входит в target-хекс.
+    // HA снимается только если ВСЕ хексы стрелков совпадают (наихудший для стрелка = TEM 1).
+    if (terrainAt(targetHex.col, targetHex.row).includes('crestLine')) {
+        for (const u of hexUnits) {
+            if (!u.hasStartedMoving) continue;
+            if (!u.path || u.path.length < 2) continue;
+            const prevHex = u.path[u.path.length - 2].hex;
+            const allMatch = shooterHexes.every(sHex => {
+                const hexPath  = _hexLine(sHex, targetHex);
+                const losEntry = hexPath[hexPath.length - 2];
+                return losEntry.col === prevHex.col && losEntry.row === prevHex.row;
+            });
+            if (allMatch) return 0;
+        }
+    }
+
     return 1;
 }
 
@@ -121,6 +139,24 @@ function calcHeightAdvantage(shooters, targetHex) {
 // Hindrance + LOS
 // ===========================================================================
 const HINDRANCE_TERRAINS = ['orchard', 'grain', 'brush'];
+
+// DRM для дыма (fire through/into). Fire out of smoke — константа +1.
+const SMOKE_DRM = {
+    smoke: 2,
+};
+
+// Smoke DRM вдоль LoS: в хексах пути — +DRM (through/into), в shooter hex — +1 (out of)
+function _calcSmokeDRM(sHex, targetHex, hexPath) {
+    let d = 0;
+    for (const h of hexPath) {
+        const t = terrainAt(h.col, h.row);
+        const drm = t.map(s => SMOKE_DRM[s]).find(v => v);   // первый найденный smoke в терпейне
+        if (!drm) continue;
+        if (h.col === sHex.col && h.row === sHex.row) d += 1;   // fire out of smoke
+        else d += drm;                                            // through / into
+    }
+    return d;
+}
 
 // Hex line через cube-координаты (Red Blob Games) — O(N) без drift-итераций
 function _offsetToCube(col, row) {
@@ -237,8 +273,9 @@ function _los_stays_on_road_in_Orchard(shooterHex, targetHex, hexPath) {
 function checkHindrance(shooterHexes, targetHex) {
     return Math.max(...shooterHexes.map(sHex => {
         const hexPath = _hexLine(sHex, targetHex);
-        if (_los_stays_on_road_in_Orchard(sHex, targetHex, hexPath)) return 0;
-        let total = 0;
+        // Smoke DRM всегда, поверх остального (tree-lined road shield его не снимает)
+        let total = _calcSmokeDRM(sHex, targetHex, hexPath);
+        if (_los_stays_on_road_in_Orchard(sHex, targetHex, hexPath)) return total;
         for (const h of hexPath) {
             if (h.col === sHex.col       && h.row === sHex.row)       continue;
             if (h.col === targetHex.col  && h.row === targetHex.row)  continue;
@@ -404,6 +441,44 @@ function _calc_weapons_kept_RoF(weaponsInFG, coloredDie, brokenWeapons) {
     return kept;
 }
 
+// Residual FP оставленный defensive fire атакой в target-хексе (правило 3.3.5).
+// FP исключает malfunctioned/keptRoF weapons — их вклад в атаке не даёт residual.
+// Column shift за каждый positive external DRM source:
+//   1) leader в FG с положительным leadershipModifier (плохой лидер)
+//   2) CX (exhausted) shooter в FG
+//   3) hindrance > 0 (сам факт наличия)
+// HA и негативный leader-DRM не влияют. Cowering не влияет.
+function _calc_residual_FP(firegroupUnits, targetHex, hindrance, brokenWeapons, weaponsKeepingRoF) {
+    // weapons сломавшиеся или сохранившие RoF — не вносят FP в residual
+    const excludeIds = new Set([...brokenWeapons, ...weaponsKeepingRoF]);
+
+    // Суммируем FP оставшихся членов FG (calcFirepower уже учитывает range/pinned/SFF halving)
+    const adjustedFP = firegroupUnits
+        .filter(u => !excludeIds.has(u.id))
+        .reduce((s, u) => s + calcFirepower(u, targetHex), 0);
+    if (adjustedFP <= 0) return 0;
+
+    // Original IFT-колонка (до cowering) по оставшемуся FP
+    const adjustedCol = getIFTColumn(adjustedFP);
+
+    // Считаем сдвиги колонок влево за external DRM sources
+    let shifts = 0;
+    if (firegroupUnits.some(u => u.type === 'leader' && (u.leadershipModifier ?? 0) > 0)) shifts++;
+    if (firegroupUnits.some(u => u.exhausted)) shifts++;
+    if (hindrance > 0) shifts++;
+
+    // Применяем сдвиги, не ниже 0-го индекса
+    const colIdx      = IFT_COLUMNS.indexOf(adjustedCol);
+    const residualIdx = Math.max(0, colIdx - shifts);
+    const residualCol = IFT_COLUMNS[residualIdx];
+
+    // Residual FP = residualCol / 2 (round down, max 12)
+    const residualFP  = Math.min(12, Math.floor(residualCol / 2));
+
+    console.log(`[residual] adjustedFP=${adjustedFP} col=${adjustedCol}, shifts=${shifts}, residualCol=${residualCol}, residualFP=${residualFP}`);
+    return residualFP;
+}
+
 function calcFireEffect(units, targetHex, drm = 0) {
     const fp    = calcTotalFirepower(units, targetHex);
     let col     = getIFTColumn(fp);
@@ -475,9 +550,18 @@ function _processMC(targets, k, result, fixedDr = null) {
             u.pinned = false;
             u.exhausted = false;
             if (baseDr === 12) {
-                console.log(`[MC original 12] ${u.id} → CR в дополнение к breaking`);
+                console.log(`[MC original 12] ${u.id} → CR + possible quality reduce`);
                 u.broken = true;   // мутация чтобы _replace_unit унаследовал broken на HS
-                return _casualtyReduction(u);
+                const crResult = _casualtyReduction(u);
+                // CR + ELR fail → engine делает CR, потом quality reduce на новом юните
+                if (crResult === 'reduced' && finalDr - morale > u.elr) return 'reduce_then_quality';
+                return crResult;
+            }
+            // ELR check (5.1): fail превышает ELR → quality reduce вместо простого broken
+            if (finalDr - morale > u.elr) {
+                console.log(`[ELR] ${u.id}: failedBy=${finalDr - morale} > ELR=${u.elr} → quality reduce to ${u.lowerQuality}`);
+                u.broken = true;   // мутация чтобы _replace_unit унаследовал broken
+                return 'quality_reduce';
             }
             return 'broken';
         }
@@ -721,6 +805,35 @@ function _check_SFF_valid(firegroupUnits, targetHex, units) {
     return true;
 }
 
+// Residual FP атака (правило 3.3.5) — одна IFT DR на всех вошедших юнитов.
+// applyFireEffect уже сортирует лидеров first и обрабатывает leader-help pool.
+// DRM = TEM/Smoke цели + FFNAM/FFMO по первому юниту (как hexUnits[0] в defensiveFF).
+function residualAttack(residualFP, targetUnits, targetHex) {
+    const col = getIFTColumn(residualFP);
+    const arr = IFT[col];
+
+    const dr  = roll2d6();
+
+    const tem     = calcTEM(targetHex);
+    const ffnam   = targetUnits.length > 0 ? calcFFNAM(targetUnits[0]) : 0;
+    const ffmoRaw = targetUnits.length > 0 ? calcFFMO(targetUnits[0], targetHex, false) : 0;
+    // TEM в target отменяет FFMO
+    const ffmo    = (tem > 0) ? 0 : ffmoRaw;
+    // Smoke в target hex — для residual нет источника, только "into"
+    const targetTerrain = terrainAt(targetHex.col, targetHex.row);
+    const smokeDRM = targetTerrain.map(t => SMOKE_DRM[t]).find(v => v) ?? 0;
+    const drm     = tem + ffnam + ffmo + smokeDRM;
+
+    const idx = Math.max(0, dr + drm);
+    console.log(`[residual attack] targets=[${targetUnits.map(u=>u.id).join(',')}], FP=${residualFP}, col=${col}, DR=${dr}, DRM=${drm} (TEM=${tem}, FFNAM=${ffnam}, FFMO=${ffmo}, smoke=${smokeDRM}), idx=${idx}`);
+    if (idx >= arr.length) {
+        console.log('[residual attack] промах');
+        return {};
+    }
+    console.log('[residual attack] эффект:', arr[idx]);
+    return applyFireEffect(arr[idx], targetUnits);
+}
+
 function defensiveFF(firegroupUnits, targetHex, hexUnits, units) {
     if (!_check_SFF_valid(firegroupUnits, targetHex, units)) {
         console.log('[defensiveFF] SFF constraint violated — атака отменена');
@@ -750,7 +863,8 @@ function defensiveFF(firegroupUnits, targetHex, hexUnits, units) {
     }
 
     const baseTem       = calcTEM(targetHex);
-    const ha            = calcHeightAdvantage(firegroupUnits, targetHex);
+    const shooterHexesForHA = firegroupUnits.map(u => u.hex);
+    const ha                = calcHeightAdvantage(shooterHexesForHA, targetHex, hexUnits);
     const tem           = baseTem > 0 ? baseTem : ha;
     let shield = false;
     if (firegroupUnits.length > 0) {
@@ -773,6 +887,7 @@ function defensiveFF(firegroupUnits, targetHex, hexUnits, units) {
     const brokenWeapons     = _calc_malfunction(weaponsInFG, baseDr);
     for (const id of brokenWeapons) changes[id] = 'broken';   // флип на brokenSrc через _apply_changes_for_targets
     const weaponsKeepingRoF = _calc_weapons_kept_RoF(weaponsInFG, coloredDie, brokenWeapons);
+    const residualFP        = _calc_residual_FP(firegroupUnits, targetHex, hindrance, brokenWeapons, weaponsKeepingRoF);
 
     // FPF Self-NMC: если FinalFire-стрелки в FG, они (+ directing leaders)
     // проходят NMC с original DR + leadership DRM (k=0, только leader help).
@@ -786,7 +901,7 @@ function defensiveFF(firegroupUnits, targetHex, hexUnits, units) {
         _checkLeaderLoss(nmcSubjects, changes);
     }
 
-    return { changes, weaponsKeepingRoF };
+    return { changes, weaponsKeepingRoF, residualFP };
 }
 
 // Стоимость входа в гекс по типу террейна (MF)
@@ -872,6 +987,10 @@ function _check_if_unit_is_in_same_hex_as_fg(unit, fg, units) {
 }
 
 function road_bonus_is_possible(targetHex, u, overrideTerrain = null) {
+    if (u.usedWoodsRoad) return false;   // использовал Woods-Road защиту → нет road bonus
+    // Smoke в target hex → +1 MF при входе → road bonus не применяется (правило 1.2.5)
+    const targetTerrain = terrainAt(targetHex.col, targetHex.row);
+    if (targetTerrain.some(t => SMOKE_DRM[t])) return false;
     return _isRoadHex(targetHex, overrideTerrain) && _all_path_is_road(u.path) && u.roadBonus === 1;
 }
 
@@ -884,6 +1003,11 @@ function lead_bonus_is_possible(u, mg, units) {
 function checkCost(targetHex, fromHex, overrideTerrain = null) {
     let targetTerrain = terrainAt(targetHex.col, targetHex.row);
 
+    // Smoke в target hex → +1 MF при входе (правило: не за выход).
+    // Считаем ДО overrideTerrain — smoke живёт в overlay независимо от Woods-Road выбора.
+    const smokeExtra = targetTerrain.some(t => SMOKE_DRM[t]) ? 1 : 0;
+
+    // Woods-Road: игрок выбрал UseWoods/UseRoad → террейн интерпретируется одним типом
     if (overrideTerrain) targetTerrain = [overrideTerrain];
 
     // crestLine — особый случай: цена зависит от того, поднимаемся ли мы или спускаемся
@@ -904,24 +1028,51 @@ function checkCost(targetHex, fromHex, overrideTerrain = null) {
         const fromTerrain = terrainAt(fromHex.col, fromHex.row);
         const fromAbove   = fromTerrain.includes('hill') || fromTerrain.includes('crestLine');
 
-        return fromAbove ? baseCost : baseCost * 2;
+        return (fromAbove ? baseCost : baseCost * 2) + smokeExtra;
     }
 
-    // обычный гекс: максимум по террейнам (open hex = 1)
+    // open ground — нет ни static, ни dynamic (в т.ч. smoke) → всегда 1
     if (targetTerrain.length === 0) return 1;
-    return Math.max(...targetTerrain.map(t => TERRAIN_COST[t] ?? 1));
+    // обычный гекс: максимум по террейнам
+    return Math.max(...targetTerrain.map(t => TERRAIN_COST[t] ?? 1)) + smokeExtra;
 }
 
 function mf_after_move(unit, targetHex, overrideTerrain = null) {
     return unit.mf - checkCost(targetHex, unit.hex, overrideTerrain);
 }
 
+// Portage penalty (4.0): PP possessed weapons сверх IPC → штраф MF.
+// Считается динамически при каждом move-check — drop/pickup оружия сразу меняет excess.
+function _portageExcess(u, units, mg = null) {
+    if (u.category !== 'infantry') return 0;
+    const possessedPP = Object.values(units)
+        .filter(w => w.category === 'carried' && w.possessorId === u.id)
+        .reduce((s, w) => s + (w.portagePoints ?? 0), 0);
+
+    // SMC contribution: каждый Good Order лидер в MG добавляет +1 IPC ПЕРВОМУ MMC в MG.
+    let smcBonus = 0;
+    if (mg && u.type === 'squad') {
+        const mmcsInMg = mg.filter(id => units[id].type === 'squad');
+        if (mmcsInMg[0] === u.id) {
+            smcBonus = mg.filter(id => {
+                const l = units[id];
+                return l.type === 'leader' && !l.broken && !l.pinned && !l.wounded;
+            }).length;
+        }
+    }
+    return Math.max(0, possessedPP - ((u.ipc ?? 0) + smcBonus));
+}
+
 // Новый mf после хода (с учётом реактивно потраченных бонусов).
 // null => "нет реакции" — двигаться нельзя.
 function calc_mf(u, targetHex, mg, units, overrideTerrain = null) {
-    const m = mf_after_move(u, targetHex, overrideTerrain);
+    const rawM   = mf_after_move(u, targetHex, overrideTerrain);
+    const excess = _portageExcess(u, units, mg);
+    // effective m: доступный MF (u.mf - excess) минус cost. По нему проверяем бонусы.
+    const m = rawM - excess;
 
-    if (m >= 0) return m;
+    // Возврат сырой u.mf - cost (без excess), чтобы не bakes penalty в u.mf → dynamic.
+    if (m >= 0) return rawM;
 
     if (m === -1 && lead_bonus_is_possible(u, mg, units))                                                return 0;
     if (m === -1 && !lead_bonus_is_possible(u, mg, units) && road_bonus_is_possible(targetHex, u, overrideTerrain) && u.leaderBonus ==1 )       return null;
@@ -940,7 +1091,9 @@ function calc_mf(u, targetHex, mg, units, overrideTerrain = null) {
 
 // Остаток leaderBonus после хода
 function calc_leader_bonus(u, targetHex, mg, units, overrideTerrain = null) {
-    const m = mf_after_move(u, targetHex, overrideTerrain);
+    const rawM   = mf_after_move(u, targetHex, overrideTerrain);
+    const excess = _portageExcess(u, units, mg);
+    const m = rawM - excess;
 
     if (!hasLeader(mg, units))                  return u.leaderBonus;
     if (!lead_bonus_is_possible(u, mg, units))  return u.leaderBonus;
@@ -955,7 +1108,9 @@ function calc_leader_bonus(u, targetHex, mg, units, overrideTerrain = null) {
 
 // Остаток roadBonus после хода
 function calc_road_bonus(u, targetHex, mg, units, overrideTerrain = null) {
-    const m = mf_after_move(u, targetHex, overrideTerrain);
+    const rawM   = mf_after_move(u, targetHex, overrideTerrain);
+    const excess = _portageExcess(u, units, mg);
+    const m = rawM - excess;
 
     if (m === -1 && road_bonus_is_possible(targetHex, u, overrideTerrain) && !hasLeader(mg, units))     return 0;
     if (m === -1 && road_bonus_is_possible(targetHex, u, overrideTerrain) && u.leaderBonus === 0)       return 0;
@@ -1059,17 +1214,71 @@ export const Rules = {
         return mg.every(id => this.checkAssaultMovementCapability(id, units));
     },
 
-    checkPlaceSmokeCapability(id, units) {
+    checkDropCapability(mg, units) {
+        return mg.some(id => Object.values(units).some(
+            unit => unit.category === 'carried' && unit.possessorId === id
+        ));
+    },
+
+    // Ищет пару (юнит из MG, оружие в его hex) для попытки Recover.
+    // MVP: первый годный юнит × первое годное оружие.
+    // Возвращает { unitId, weaponId } или null.
+    findRecoverCandidate(mg, units) {
+        for (const uid of mg) {
+            const u = units[uid];
+            if (u.category !== 'infantry') continue;   // carried сами не подбирают
+            if (u.mf < 1) continue;                    // на Recover нужен 1 MF
+            // Ищем в hex'e юнита unpossessed weapon, ещё не двигавшееся в этой MPh
+            const weapon = Object.values(units).find(w =>
+                w.category === 'carried' &&
+                w.possessorId === null &&
+                !w.movedThisMPh &&
+                w.hex?.col === u.hex.col && w.hex?.row === u.hex.row
+            );
+            if (weapon) return { unitId: uid, weaponId: weapon.id };
+        }
+        return null;
+    },
+
+    rollRecoverAttempt(u) {
+        const raw = _rollD6_();
+        const dr  = raw + (u.exhausted ? 1 : 0);
+        const success = dr < 6;
+        console.log(`[recover] ${u.id}: dr=${raw}${u.exhausted ? '+1 CX' : ''}=${dr} → ${success ? 'ok' : 'fail'}`);
+        return { success };
+    },
+
+    checkPlaceSmokeCapability(id, units, mg = null) {
         const u = units[id];
         if (u.type !== 'squad') return false;
+        if (!u.smokeExponent)   return false;   // нет SE — не может размещать
+        if (u.smokeAttempted)   return false;   // уже пытался в этом MPh
         if (u.broken || u.pinned || u.wounded || u.exhausted) return false;
-        if (u.mf < 1) return false;
+        if (u.mf - _portageExcess(u, units, mg) < 1) return false;
         return true;
     },
 
     checkIfPlaceSmokeForMovementGroupIsValid(mg, units) {
         if (mg.length === 0) return false;
-        return mg.every(id => this.checkPlaceSmokeCapability(id, units));
+        return mg.some(id => this.checkPlaceSmokeCapability(id, units, mg));   // хотя бы один способен → показываем кнопку
+    },
+
+    // Роллит dr для попытки размещения дыма каждым юнитом из mg.
+    // Возвращает { [id]: { success, mfEnded } }. State-мутации делает engine.
+    rollSmokePlacementAttempts(units, unitIds, mfCost = 1) {
+        const results = {};
+        for (const id of unitIds) {
+            const u = units[id];
+            if (!this.checkPlaceSmokeCapability(id, units, unitIds)) continue;
+            if (u.mf - _portageExcess(u, units, unitIds) < mfCost) continue;
+
+            const rawDr = _rollD6_();
+            const drmDr = u.exhausted ? rawDr + 1 : rawDr;
+            const success = drmDr <= u.smokeExponent;
+            console.log(`[smoke] ${id}: dr=${rawDr}${u.exhausted ? '+1 CX' : ''}=${drmDr} vs SE=${u.smokeExponent} → ${success ? 'placed' : 'failed'}`);
+            results[id] = { success, mfEnded: rawDr === 6 };
+        }
+        return results;
     },
 
     _isRoadHex,
@@ -1078,6 +1287,7 @@ export const Rules = {
 
     // огонь
     defensiveFF,
+    residualAttack,
     filter_hexes_with_Los,
     array_of_adjacent_Hexes_arrays,
     hexInList: _hexInList,
@@ -1096,7 +1306,7 @@ export const Rules = {
             const u = ctx.units[id];
             if (!u.assaultMovement) continue;
             if (u.hasStartedMoving) return null;
-            if (u.mf - checkCost(ctx.targetHex, u.hex, overrideTerrain) <= 0) return null;
+            if (u.mf - checkCost(ctx.targetHex, u.hex, overrideTerrain) - _portageExcess(u, ctx.units, ctx.movementGroup) <= 0) return null;
         }
 
         let result = {};
@@ -1114,29 +1324,31 @@ export const Rules = {
             const u = ctx.units[id];
             const newPath = [...u.path, { hex: ctx.targetHex, isRoad: _isRoadHex(ctx.targetHex, overrideTerrain) }];
 
+            const effMf = result[id].mf - _portageExcess(u, ctx.units, ctx.movementGroup);
+
             result[id].movementCompleted = false;
 
-            if (result[id].mf === 0 &&
+            if (effMf <= 0 &&
                 !hasLeader(ctx.movementGroup, ctx.units) &&
                 !_all_path_is_road(newPath)) {
                 result[id].movementCompleted = true;
             }
 
-            if (result[id].mf === 0 &&
+            if (effMf <= 0 &&
                 !hasLeader(ctx.movementGroup, ctx.units) &&
                 _all_path_is_road(newPath) &&
                 result[id].roadBonus === 0) {
                 result[id].movementCompleted = true;
             }
 
-            if (result[id].mf === 0 &&
+            if (effMf <= 0 &&
                 hasLeader(ctx.movementGroup, ctx.units) &&
                 result[id].leaderBonus === 0 &&
                 !_all_path_is_road(newPath)) {
                 result[id].movementCompleted = true;
             }
 
-            if (result[id].mf === 0 &&
+            if (effMf <= 0 &&
                 hasLeader(ctx.movementGroup, ctx.units) &&
                 result[id].leaderBonus === 0 &&
                 _all_path_is_road(newPath) &&

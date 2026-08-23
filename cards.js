@@ -1,5 +1,6 @@
 import { hexMap as V_HEXMAP } from './hexmap.js';
 import { COL_COUNT } from './hexUtils.js';
+import { State } from './state.js';
 
 // Каждая карта визуально высотой ~10 гексов (645px / HEX_H ≈ 10),
 // хотя мировая сетка простирается на ROW_COUNT=30 (несколько карт стеком)
@@ -37,8 +38,11 @@ export const cards = {
 };
 
 // Найти террейн для world (col, row) — обходит все карты,
-// учитывает границы и rotation каждой.
+// учитывает границы и rotation каждой. Мержит static hexmap + runtime overlay (smoke и т.п.).
 export function terrainAt(worldCol, worldRow) {
+    // Runtime overlay (smoke) — общий для всех карт, ключ по мировым координатам
+    const dynamic = State.dynamicTerrain?.[`${worldCol},${worldRow}`] ?? [];
+
     for (const card of Object.values(cards)) {
         let lc = worldCol - card.worldColStart;
         let lr = worldRow - card.worldRowStart + 1;
@@ -57,8 +61,8 @@ export function terrainAt(worldCol, worldRow) {
 
         const label = colToLocalLetters(lc) + lr;
         const terrain = card.hexmap[label];
-        if (terrain) return terrain;
-        return [];   // гекс в этой карте, но террейна не задано → открытая местность
+        if (terrain) return [...terrain, ...dynamic];
+        return [...dynamic];   // гекс в этой карте, но террейна не задано → только overlay
     }
-    return [];       // ни одной карте не принадлежит
+    return [...dynamic];       // ни одной карте не принадлежит → только overlay
 }

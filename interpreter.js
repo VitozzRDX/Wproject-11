@@ -64,6 +64,24 @@ const RULES = [
     },
     {
         requiresAny: [
+            { isButton: ctx => ctx.buttonLabel === 'Drop' }
+        ],
+        name: 'Drop'
+    },
+    {
+        requiresAny: [
+            { isButton: ctx => ctx.buttonLabel === 'Recover' }
+        ],
+        name: 'Recover'
+    },
+    {
+        requiresAny: [
+            { isButton: ctx => ctx.buttonLabel === 'Drop' }
+        ],
+        name: 'Drop'
+    },
+    {
+        requiresAny: [
             { isButton: ctx => ctx.buttonLabel === 'UseWoods' }
         ],
         name: 'UseWoods'
@@ -116,6 +134,13 @@ const RULES = [
         name: 'addToFireGroup'
     },
     {
+        requiresAny: [{
+            pendingSmoke: () => State.pendingSmoke,
+            leftClick:    ctx => ctx.button !== 2,
+        }],
+        name: 'PlaceSmokeTarget'
+    },
+    {
         requiresAny: [
             {
                 noShift:               ctx => !ctx.shiftKey,
@@ -150,8 +175,10 @@ const KEY_RULES = [
 export function interpretEvent(e) {
 
     const ctx = createContext(e);
+    console.log('[click] ctx=', ctx);
 
     const rule = RULES.find(r => matchRule(r, ctx));  // первое подошедшее правило
+    console.log('[click] matched rule:', rule?.name ?? 'NONE');
     if (!rule) return;
 
     Engine.execute({ name: rule.name, ctx:ctx }); // → { name: 'SELECT_UNIT', unitId: ..., pos: ... }

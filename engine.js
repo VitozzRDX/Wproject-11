@@ -1,7 +1,7 @@
 import { State } from './state.js';
 import { Rules } from './rules.js';
 import { PhaseManager } from './phase_manager.js';
-import { pixelToHex, hexToPixel, hexLabel } from './hexUtils.js';
+import { pixelToHex, hexToPixel, hexLabel, hexDistance } from './hexUtils.js';
 import { UIState } from './uiState.js';
 import { spawn_unit } from './unitloading.js';
 import { getLastHit } from './terrainLOS.js';
@@ -92,6 +92,8 @@ const handlers = {
             UIState.removeButton('DoubleTime');
             UIState.removeButton('AssaultMovement');
             UIState.removeButton('PlaceSmoke');
+            UIState.removeButton('Drop');
+            UIState.removeButton('Recover');
 
             return;
         }
@@ -141,6 +143,15 @@ const handlers = {
             for (const id of result.weaponsKeepingRoF) weaponsKeepingRoF.add(id);   // аккумулируем weapons с сохранённым RoF
             await _apply_changes_for_targets(result.changes);
             _recordFiredFrom(subFG, movedTargets);
+
+            // Residual FP — больший счётчик заменяет меньший (ASL rule 3.3.5),
+            // меньший не заменяет большего
+            const hexKey = `${targetHex.col},${targetHex.row}`;
+            if ((result.residualFP ?? 0) > (State.residualFP[hexKey] ?? 0)) {
+                State.residualFP[hexKey] = result.residualFP;
+                UIState.setResidualFP(targetHex, result.residualFP);
+                console.log(`[residual] ${hexKey} → ${result.residualFP}`);
+            }
         }
 
         // Финал: firingStatus counters — только тем, кто реально стрелял (weapons с RoF сохраняют статус)
@@ -181,12 +192,103 @@ const handlers = {
         UIState.removeButton('AssaultMovement');
         UIState.removeButton('DoubleTime');
     },
+    Drop: () => {
+        if (!Rules.checkDropCapability(State.movementGroup, State.units)) return;
+        for (const posId of State.movementGroup) {
+            let dropped = false;
+            Object.values(State.units).forEach(unit => {
+                if (unit.category !== 'carried' || unit.possessorId !== posId) return;
+                State.setUnit(unit.id, 'possessorId', null);
+                State.setUnit(unit.id, 'movedThisMPh', true);
+                State.setUnit(unit.id, 'inMovementGroup', false);
+                dropped = true;
+            });
+            if (dropped) recalculateHex(State.units[posId].hex);
+        }
+        UIState.removeButton('Drop');
+    },
+
     PlaceSmoke: () => {
-        if (!Rules.checkIfPlaceSmokeForMovementGroupIsValid(State.movementGroup, State.units)) return;
-        State.movementGroup.forEach(id => _expend_mf(id, 1));
-        console.log('smoke placed');
+        State.pendingSmoke = true;
+        console.log('[smoke] выбор хекса: свой (1 MF) или соседний (2 MF)');
         UIState.removeButton('PlaceSmoke');
     },
+
+    Drop: () => {
+        if (!Rules.checkDropCapability(State.movementGroup, State.units)) return;
+        for (const posId of State.movementGroup) {
+            let dropped = false;
+            Object.values(State.units).forEach(w => {
+                if (w.category !== 'carried' || w.possessorId !== posId) return;
+                State.setUnit(w.id, 'possessorId', null);
+                State.setUnit(w.id, 'movedThisMPh', true);
+                State.setUnit(w.id, 'inMovementGroup', false);
+                dropped = true;
+            });
+            if (dropped) recalculateHex(State.units[posId].hex);
+        }
+        _refreshMGButtons();
+    },
+
+    Recover: () => {
+        const cand = Rules.findRecoverCandidate(State.movementGroup, State.units);
+        if (!cand) return;
+        const u = State.units[cand.unitId];
+
+        _expend_mf(cand.unitId, 1);
+
+        const { success } = Rules.rollRecoverAttempt(u);
+        if (success) {
+            State.setUnit(cand.weaponId, 'possessorId', cand.unitId);
+            State.setUnit(cand.weaponId, 'movedThisMPh', true);
+            State.setUnit(cand.weaponId, 'inMovementGroup', true);
+            recalculateHex(u.hex);
+        }
+        _refreshMGButtons();
+    },
+
+    PlaceSmokeTarget: (ctx) => {
+        State.pendingSmoke = false;   // сброс — один клик = одна попытка (успех или отмена)
+        const targetHex = pixelToHex(ctx.pos.x, ctx.pos.y);
+
+        const firstId = State.movementGroup[0];
+        if (!firstId) return;
+        const currentHex = State.units[firstId].hex;
+        const dist = hexDistance(currentHex, targetHex);
+
+        let mfCost;
+        if (dist === 0)      mfCost = 1;
+        else if (dist === 1) mfCost = 2;
+        else {
+            console.log(`[smoke] хекс (${targetHex.col},${targetHex.row}) слишком далеко — отмена`);
+            return;
+        }
+
+        const results = Rules.rollSmokePlacementAttempts(State.units, State.movementGroup, mfCost);
+        let anySuccess = false;
+
+        for (const [id, r] of Object.entries(results)) {
+            _expend_mf(id, mfCost);
+            State.setUnit(id, 'smokeAttempted', true);
+            if (r.success) anySuccess = true;
+            if (r.mfEnded) {
+                State.setUnit(id, 'mf', 0);
+                State.setUnit(id, 'movementCompleted', true);
+                console.log(`[smoke] ${id}: original dr=6 → MPh ended`);
+            }
+        }
+
+        if (anySuccess) _place_Smoke_if_possible(targetHex);
+    },
+}
+
+// Пытается положить дым в хекс. Если уже есть дым — не заменяет (MVP).
+function _place_Smoke_if_possible(hex) {
+    const hexKey = `${hex.col},${hex.row}`;
+    const existing = State.dynamicTerrain[hexKey] ?? [];
+    if (existing.some(t => t === 'smoke')) return;
+    State.dynamicTerrain[hexKey] = [...existing, 'smoke'];
+    UIState.setSmoke(hex);
 }
 
 // Централизованная трата MF — любое действие, расходующее MF юнита
@@ -194,11 +296,13 @@ const handlers = {
 // и сбрасывает историю огня.
 function _expend_mf(unitId, cost) {
     const u = State.units[unitId];
-    State.setUnit(unitId, 'mf', u.mf - cost);
+    const newMf = u.mf - cost;
+    State.setUnit(unitId, 'mf', newMf);
     State.setUnit(unitId, 'mf_spent_in_current_hex', u.mf_spent_in_current_hex + cost);
     State.setUnit(unitId, 'hasStartedMoving', true);
     State.fired_from_on_target_in_hex = {};
     State.mfspent = true;
+    if (newMf === 0) State.setUnit(unitId, 'movementCompleted', true);   // MF исчерпан → MPh закончена
 
     // юнит потративший MF становится валидной целью DFF (правило 3.3.3)
     if (!State.moved_movement_group) State.moved_movement_group = [];
@@ -315,12 +419,34 @@ function _replace_unit(oldId, newTemplateId, newId) {
     const hex   = old.hex;
     const layer = old.node.getLayer();
 
+    // Список weapons possessed старым юнитом — переедут на нового (reduce ≠ гибель)
+    const inheritedWeapons = Object.values(State.units)
+        .filter(u => u.category === 'carried' && u.possessorId === oldId)
+        .map(u => u.id);
+
+    // Был ли старый юнит в moved_movement_group — новый должен занять его место
+    // (иначе _movedTargetsInHex не увидит HS как валидную цель для последующего DFF)
+    const wasInMovedMG = State.moved_movement_group?.includes(oldId) ?? false;
+
     flipReplaceUnit(old.node, async () => {
-        _remove_unit(oldId);
+        _remove_unit(oldId);   // временно сбросит possessorId у weapons — восстановим ниже
         const newUnit = await spawn_unit(newTemplateId, newId, hex, layer);
         for (const [key, val] of Object.entries(inherit)) {
             if (val) State.setUnit(newId, key, true);
         }
+        // Восстанавливаем possessorship weapons на новом юните
+        for (const wid of inheritedWeapons) {
+            State.setUnit(wid, 'possessorId', newId);
+        }
+        // Возвращаем нового юнита в moved_movement_group (для DFF на HS)
+        if (wasInMovedMG) {
+            if (!State.moved_movement_group) State.moved_movement_group = [];
+            if (!State.moved_movement_group.includes(newId)) {
+                State.moved_movement_group.push(newId);
+            }
+        }
+        // Перепозиционировать стек: weapon (снова possessed) над HS
+        recalculateHex(hex);
         return newUnit.node;
     });
 }
@@ -339,6 +465,27 @@ async function _apply_changes_for_targets(changes) {
             const u = State.units[id];
             if (u?.halfSquad) _replace_unit(id, u.halfSquad, id);
             await sleep(300);
+            continue;
+        }
+        // quality_reduce (ELR 5.1) — юнит заменяется на lower-quality того же размера
+        if (state === 'quality_reduce') {
+            const u = State.units[id];
+            if (u?.lowerQuality) _replace_unit(id, u.lowerQuality, id);
+            await sleep(300);
+            continue;
+        }
+        // reduce_then_quality — original 12 + fail > ELR: сначала CR, потом quality reduce на новом HS
+        if (state === 'reduce_then_quality') {
+            const u = State.units[id];
+            if (u?.halfSquad) {
+                _replace_unit(id, u.halfSquad, id);
+                await sleep(300);
+                const newHS = State.units[id];
+                if (newHS?.lowerQuality) {
+                    _replace_unit(id, newHS.lowerQuality, id);
+                    await sleep(300);
+                }
+            }
             continue;
         }
 
@@ -376,7 +523,7 @@ function _movedTargetsInHex(targetHex) {
 }
 
 // Выполнить мув с возможным overrideTerrain (UseWoods='forest' / UseRoad='dirtRoad')
-function _executeMove(targetHex, overrideTerrain) {
+async function _executeMove(targetHex, overrideTerrain) {
     const result = Rules.arrangeMovement({
         movementGroup:   State.movementGroup,
         units:           State.units,
@@ -387,7 +534,7 @@ function _executeMove(targetHex, overrideTerrain) {
 
     _create_splitted_group_in_State(State.movementGroup);
     _finalize_unfinished_previous_MG();
-    _apply_movement_result_in_State_for_all_MG(result, targetHex, overrideTerrain);
+    await _apply_movement_result_in_State_for_all_MG(result, targetHex, overrideTerrain);
     _create_moved_movement_group_in_State();
     _clear_MG_if_all_completed();
 
@@ -406,6 +553,9 @@ function _executeMove(targetHex, overrideTerrain) {
         UIState.removeButton('UseWoods');
         UIState.removeButton('UseRoad');
     }
+
+    // hex юнитов сменился → Recover eligibility могла появиться/пропасть
+    _refreshMGButtons();
 }
 
 // Авто-очистка movementGroup если все юниты реально закончили движение
@@ -419,7 +569,7 @@ function _clear_MG_if_all_completed() {
 }
 
 // Применить результат arrangeMovement — per-unit изменения
-function _apply_movement_result_in_State_for_all_MG(result, targetHex, overrideTerrain) {
+async function _apply_movement_result_in_State_for_all_MG(result, targetHex, overrideTerrain) {
     const isRoad = Rules._isRoadHex(targetHex, overrideTerrain);
     // 3.3.3: любая трата MF сбрасывает историю огня
     State.fired_from_on_target_in_hex = {};
@@ -443,6 +593,19 @@ function _apply_movement_result_in_State_for_all_MG(result, targetHex, overrideT
             }
         });
     });
+
+    // Residual FP (правило 3.3.5): если в хексе есть residual counter,
+    // все только что вошедшие юниты атакуются одной IFT DR (leader first через _processMC)
+    const hexKey     = `${targetHex.col},${targetHex.row}`;
+    const residualFP = State.residualFP[hexKey] ?? 0;
+    if (residualFP > 0) {
+        const enteringUnits = Object.keys(result.unitChanges).map(id => State.units[id]);
+        console.log(`[residual trigger] hex=${hexKey} FP=${residualFP} targets=${enteringUnits.map(u=>u.id).join(',')}`);
+        const changes = Rules.residualAttack(residualFP, enteringUnits, targetHex);
+        if (Object.keys(changes).length > 0) {
+            await _apply_changes_for_targets(changes);
+        }
+    }
 }
 
 // При движении субсета — отщепить остаток в splitted_group
@@ -524,24 +687,44 @@ function _addToMovementGroup(unitId) {
     if (!State.movementGroup.includes(unitId)) {
         State.movementGroup.push(unitId);
         _setInMovementGroup(unitId, true);
+        _refreshMGButtons();
+    }
+}
 
-        if (Rules.checkIfDoubleTimeForMovementGroupIsValid(State.movementGroup, State.units)) {
-            UIState.addButton('DoubleTime', { x: 10, y: 100, label: 'DoubleTime' });
-        } else {
-            UIState.removeButton('DoubleTime');
-        }
+// Централизованно пересчитывает состояние кнопок MG (DoubleTime/AssaultMovement/
+// PlaceSmoke/Drop/Recover). Вызывать после любого изменения MG: добавление юнита,
+// после мува (hex сменился), после Drop/Recover (possessed weapons изменились).
+function _refreshMGButtons() {
+    const mg = State.movementGroup;
 
-        if (Rules.checkIfAssaultMovementForMovementGroupIsValid(State.movementGroup, State.units)) {
-            UIState.addButton('AssaultMovement', { x: 10, y: 140, label: 'AssaultMovement' });
-        } else {
-            UIState.removeButton('AssaultMovement');
-        }
+    if (Rules.checkIfDoubleTimeForMovementGroupIsValid(mg, State.units)) {
+        UIState.addButton('DoubleTime', { x: 10, y: 100, label: 'DoubleTime' });
+    } else {
+        UIState.removeButton('DoubleTime');
+    }
 
-        if (Rules.checkIfPlaceSmokeForMovementGroupIsValid(State.movementGroup, State.units)) {
-            UIState.addButton('PlaceSmoke', { x: 10, y: 260, label: 'PlaceSmoke' });
-        } else {
-            UIState.removeButton('PlaceSmoke');
-        }
+    if (Rules.checkIfAssaultMovementForMovementGroupIsValid(mg, State.units)) {
+        UIState.addButton('AssaultMovement', { x: 10, y: 140, label: 'AssaultMovement' });
+    } else {
+        UIState.removeButton('AssaultMovement');
+    }
+
+    if (Rules.checkIfPlaceSmokeForMovementGroupIsValid(mg, State.units)) {
+        UIState.addButton('PlaceSmoke', { x: 10, y: 260, label: 'PlaceSmoke' });
+    } else {
+        UIState.removeButton('PlaceSmoke');
+    }
+
+    if (Rules.checkDropCapability(mg, State.units)) {
+        UIState.addButton('Drop', { x: 10, y: 300, label: 'Drop' });
+    } else {
+        UIState.removeButton('Drop');
+    }
+
+    if (Rules.findRecoverCandidate(mg, State.units)) {
+        UIState.addButton('Recover', { x: 10, y: 340, label: 'Recover' });
+    } else {
+        UIState.removeButton('Recover');
     }
 }
 
