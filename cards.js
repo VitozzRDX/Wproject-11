@@ -1,4 +1,5 @@
 import { hexMap as V_HEXMAP } from './hexmap.js';
+import { hexMapU as U_HEXMAP } from './hexmapU.js';
 import { COL_COUNT } from './hexUtils.js';
 import { State } from './state.js';
 
@@ -33,7 +34,7 @@ export const cards = {
         width:  COL_COUNT,
         height: CARD_ROWS,
         rotation: 0,       // U не поворачиваем
-        hexmap: {},         // U-карту наполним позже
+        hexmap: U_HEXMAP,
     },
 };
 

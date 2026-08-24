@@ -61,10 +61,10 @@ export function initPositioning() {
     // Первичный проход — расставить всё в гексах при загрузке
     const uniqueHexes = new Set();
     Object.values(State.units).forEach(u => {
-        if (u.hex) uniqueHexes.add(`${u.hex.col}-${u.hex.row}`);
+        if (u.hex) uniqueHexes.add(`${u.hex.col},${u.hex.row}`);
     });
     uniqueHexes.forEach(key => {
-        const [col, row] = key.split('-').map(Number);
+        const [col, row] = key.split(',').map(Number);
         recalculateHex({ col, row });
     });
 }

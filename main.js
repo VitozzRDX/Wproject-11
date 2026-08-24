@@ -8,7 +8,8 @@ import { UIState } from './uiState.js';
 import { runFireSimulation } from './fireSimulation.js';
 import { runWoundSimulation } from './woundSimulation.js';
 import { initTerrainLOS } from './terrainLOS.js';
-import { hexToPixel, COL_COUNT, ROW_COUNT, R, hexLabel } from './hexUtils.js';
+import { hexToPixel, pixelToHex, COL_COUNT, ROW_COUNT, R, hexLabel } from './hexUtils.js';
+import { cards, terrainAt } from './cards.js';
 
 const stage = new Konva.Stage({
     container: 'container',
@@ -139,13 +140,113 @@ async function init() {
     await load_and_draw_units();
     PhaseManager.setPhase('german movement phase');
 
-    stage.on('click', function (e) {
+    // --- DEBUG tagging mode ---
+    // F — toggle; в режиме клики собирают hex-лейблы в Set (повторный клик = убрать)
+    // P — печать сета и очистка. C — просто очистка.
+    const _tagged = new Set();
+    let _tagMode = false;
 
-        interpreter.interpretEvent(e);  // handle - interpretEvent
-        
+    stage.on('click', function (e) {
+        if (_tagMode) {
+            const st  = e.target.getStage();
+            const raw = st.getPointerPosition();
+            const pos = { x: raw.x - st.x(), y: raw.y - st.y() };
+            const h   = pixelToHex(pos.x, pos.y);
+            const label = hexLabel(h.col, h.row);
+            if (_tagged.has(label)) {
+                _tagged.delete(label);
+                console.log(`[tag] -${label} (total: ${_tagged.size})`);
+            } else {
+                _tagged.add(label);
+                console.log(`[tag] +${label} (total: ${_tagged.size})`);
+            }
+            return;
+        }
+        interpreter.interpretEvent(e);
     });
 
-    window.addEventListener('keydown', interpreter.interpretKeyEvent);
+    window.addEventListener('keydown', (e) => {
+        if (e.key === 'F' || e.key === 'f') {
+            _tagMode = !_tagMode;
+            console.log(`[MODE] tagging ${_tagMode ? 'ON' : 'OFF'}`);
+            return;
+        }
+        if (e.key === 'P' || e.key === 'p') {
+            const arr = Array.from(_tagged).sort();
+            console.log(`=== tagged (${arr.length}): ===\n${arr.join(', ')}`);
+            _tagged.clear();
+            return;
+        }
+        if (e.key === 'C' || e.key === 'c') {
+            _tagged.clear();
+            console.log('[tag] cleared');
+            return;
+        }
+        if (e.key === 'D' || e.key === 'd') {
+            _toggleTerrainOverlay();
+            return;
+        }
+        interpreter.interpretKeyEvent(e);
+    });
+
+    // Debug overlay для visual verification hexmap
+    const TERRAIN_COLOR = {
+        forest:         'rgba(0,100,0,0.35)',
+        brush:          'rgba(140,160,60,0.35)',
+        orchard:        'rgba(80,200,80,0.30)',
+        hill:           'rgba(160,100,60,0.35)',
+        stoneBuilding:  'rgba(120,120,120,0.45)',
+        woodenBuilding: 'rgba(190,140,80,0.45)',
+        dirtRoad:       'rgba(180,140,80,0.40)',
+        pavedRoad:      'rgba(60,60,60,0.50)',
+        'Woods-Road':   'rgba(80,120,60,0.40)',
+    };
+    let _overlayLayer = null;
+
+    function _toggleTerrainOverlay() {
+        if (_overlayLayer) {
+            _overlayLayer.destroy();
+            _overlayLayer = null;
+            stage.batchDraw();
+            console.log('[overlay] OFF');
+            return;
+        }
+        _overlayLayer = new Konva.Layer({ listening: false });
+        // Все terrain-хексы обеих карт (по всему миру)
+        for (let col = -COL_COUNT; col < COL_COUNT; col++) {
+            for (let row = 1; row <= ROW_COUNT; row++) {
+                const terrain = terrainAt(col, row);
+                if (terrain.length === 0) continue;
+                const { x, y } = hexToPixel(col, row);
+                // Заливка по первому "площадному" терпейну (если есть)
+                const areaT = terrain.find(t => t !== 'crestLine');
+                const color = TERRAIN_COLOR[areaT] ?? 'rgba(200,50,200,0.3)';
+                _overlayLayer.add(new Konva.RegularPolygon({
+                    x, y, sides: 6, radius: R,
+                    fill: color,
+                    stroke: terrain.includes('crestLine') ? 'red' : null,
+                    strokeWidth: terrain.includes('crestLine') ? 2 : 0,
+                    rotation: 30,
+                    listening: false,
+                }));
+                const label = terrain.join('+');
+                const t = new Konva.Text({
+                    text: label,
+                    fontSize: 8,
+                    fill: 'white',
+                    stroke: 'black',
+                    strokeWidth: 0.5,
+                    listening: false,
+                });
+                t.x(x - t.width() / 2);
+                t.y(y - 4);
+                _overlayLayer.add(t);
+            }
+        }
+        stage.add(_overlayLayer);
+        stage.batchDraw();
+        console.log('[overlay] ON');
+    }
 
     // Скроллинг WASD через RAF — плавный без auto-repeat задержки
     const pressedKeys = new Set();
