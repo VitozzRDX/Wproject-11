@@ -19,10 +19,12 @@ const Infantry         = { ...Unit, category: 'infantry',
                                     smokeAttempted: false };   // сбрасывается в начале MPh (TODO при phase transitions)
 const Squad            = { ...Infantry, type: 'squad', mf: 4, leaderBonus: 2, firingStatus: ' ', ipc: 3 };   // MMC
 const Leader           = { ...Infantry, type: 'leader', mf: 6, quality: 'Elite', ipc: 1 };                    // SMC
-const GermanSquad_1st  = { ...Squad,  nation: 'german', quality: '1stLine', selfRally: true  };
-const SovietSquad_Elite= { ...Squad,  nation: 'soviet', quality: 'Elite',   selfRally: true  };
-const GermanLeader     = { ...Leader, nation: 'german' };
-const SovietLeader     = { ...Leader, nation: 'soviet' };
+const GermanSquad_1st   = { ...Squad,  nation: 'german',   quality: '1stLine', selfRally: true  };
+const SovietSquad_Elite = { ...Squad,  nation: 'soviet',   quality: 'Elite',   selfRally: true  };
+const AmericanSquad     = { ...Squad,  nation: 'american', quality: 'Elite',   selfRally: true  };
+const GermanLeader      = { ...Leader, nation: 'german' };
+const SovietLeader      = { ...Leader, nation: 'soviet' };
+const AmericanLeader    = { ...Leader, nation: 'american' };
 
 // --- Ветвь: переносимые предметы (SW, guns) — требуют possessor ---
 const CarriedItem      = { ...Unit, category: 'carried',
@@ -69,6 +71,17 @@ const TEMPLATES = {
   'ge_L80': { ...GermanLeader, morale: 8, brokenMorale: 8, leadershipModifier:  0, selfRally: true, src: './graf/geL80.gif', brokenSrc: './graf/geL80b.gif' },
   'ge_L70': { ...GermanLeader, morale: 7, brokenMorale: 7, leadershipModifier:  0, selfRally: true, src: './graf/geL70.gif', brokenSrc: './graf/geL70b.gif' },
   'so_L61': { ...SovietLeader, morale: 6, brokenMorale: 6, leadershipModifier: -1, selfRally: true, src: './graf/ruL61.gif', brokenSrc: './graf/ruL61b.gif' },
+  'so_L81': { ...SovietLeader, morale: 8, brokenMorale: 8, leadershipModifier: -1, selfRally: true, src: './graf/ruL81.gif', brokenSrc: './graf/ruL81b.gif' },
+
+  // American squads / HS (elr=20 explicit — не подвержены quality reduce в этом сценарии)
+  'am_667': { ...AmericanSquad, quality: 'Elite',   firepower: 6, range: 6, morale: 7, brokenMorale: 7, smokeExponent: 3, elr: 20, lowerQuality: null, halfSquad: 'am_347', src: './graf/am667S.gif', brokenSrc: './graf/amc7b.gif' },
+  'am_347': { ...AmericanSquad, quality: 'Elite',   firepower: 3, range: 4, morale: 7, brokenMorale: 7, size: 'halfSquad', src: './graf/am347H.gif', brokenSrc: './graf/amc7b.gif' },
+  'am_536': { ...AmericanSquad, quality: '2ndLine', firepower: 5, range: 3, morale: 6, brokenMorale: 6, elr: 20, lowerQuality: null, halfSquad: 'am_226', src: './graf/am536S.gif', brokenSrc: './graf/amh6b.gif' },
+  'am_226': { ...AmericanSquad, quality: '2ndLine', firepower: 2, range: 2, morale: 6, brokenMorale: 6, size: 'halfSquad', src: './graf/am226H.gif', brokenSrc: './graf/amh6b.gif' },
+
+  // American leaders
+  'am_L92': { ...AmericanLeader, morale: 9, brokenMorale: 9, leadershipModifier: -2, selfRally: true, src: './graf/amL92.gif', brokenSrc: './graf/amL92b.gif' },
+  'am_L81': { ...AmericanLeader, morale: 8, brokenMorale: 8, leadershipModifier: -1, selfRally: true, src: './graf/amL81.gif', brokenSrc: './graf/amL81b.gif' },
 
   // --- Оружие ---
   'ru_LMG': { ...MG, nation: 'soviet', firepower: 2, range: 6,
@@ -83,28 +96,62 @@ const TEMPLATES = {
   'ge_MMG': { ...MG, nation: 'german', firepower: 5, range: 12,
               breakdownNumber: 12, rof: 2, repairNumber: 2, portagePoints: 3,
               src: './graf/geMMG.gif', brokenSrc: './graf/geMMGb.gif' },
+  'am_MMG': { ...MG, nation: 'american', firepower: 5, range: 12,
+              breakdownNumber: 12, rof: 2, repairNumber: 2, portagePoints: 3,
+              src: './graf/amMMG.gif', brokenSrc: './graf/amMMGb.gif' },
 };
 
 // ---------------------------------------------------------------------------
 // Сценарий
 // ---------------------------------------------------------------------------
 const scenario = [
-  { templateId: 'ge_467', id: 'unit_01', hex: { col: 6, row: 8 } },
-  { templateId: 'ge_467', id: 'unit_02', hex: { col: 6, row: 8 } },
-  { templateId: 'ge_467', id: 'unit_03', hex: { col: 6, row: 8 } },
-  { templateId: 'ge_447', id: 'unit_04', hex: { col: -5, row: 4 } },
-  { templateId: 'ge_447', id: 'unit_05', hex: { col: -5, row: 4 } },
-  { templateId: 'ge_447', id: 'unit_06', hex: { col: -5, row: 4 } },
-  { templateId: 'ge_447', id: 'unit_07', hex: { col: 7, row: 2 } },
-  { templateId: 'ge_447', id: 'unit_08', hex: { col: 7, row: 2 } },
-  { templateId: 'ge_447', id: 'unit_09', hex: { col: 7, row: 2 } },
-  { templateId: 'ge_L81', id: 'unit_L81', hex: { col: 6, row: 8 } },
-  { templateId: 'ge_L80', id: 'unit_L80', hex: { col: -5, row: 4 } },
-  { templateId: 'ge_MMG', id: 'geMMG_vG8', possessorId: 'unit_01' },
-  { templateId: 'ge_LMG', id: 'geLMG_vH2', possessorId: 'unit_07' },
-  { templateId: 'ge_L70', id: 'unit_L70', hex: { col: 7, row: 2 } },
-  { templateId: 'ge_LMG', id: 'geLMG_uAC4', possessorId: 'unit_04' },
-  { templateId: 'ge_LMG', id: 'geLMG_vH2_2', possessorId: 'unit_08' },
+  // --- German (defender) ---
+  { templateId: 'ge_467', id: 'unit_01', side: 'defender', hex: { col: 38, row: 9 } },   // vG8
+  { templateId: 'ge_467', id: 'unit_02', side: 'defender', hex: { col: 38, row: 9 } },
+  { templateId: 'ge_467', id: 'unit_03', side: 'defender', hex: { col: 38, row: 9 } },
+  { templateId: 'ge_447', id: 'unit_04', side: 'defender', hex: { col: 29, row: 4 } },   // moved from 27-5 → 29-4
+  { templateId: 'ge_447', id: 'unit_05', side: 'defender', hex: { col: 29, row: 4 } },
+  { templateId: 'ge_447', id: 'unit_06', side: 'defender', hex: { col: 29, row: 4 } },
+  { templateId: 'ge_447', id: 'unit_07', side: 'defender', hex: { col: 39, row: 3 } },   // vH2
+  { templateId: 'ge_447', id: 'unit_08', side: 'defender', hex: { col: 39, row: 3 } },
+  { templateId: 'ge_447', id: 'unit_09', side: 'defender', hex: { col: 39, row: 3 } },
+  { templateId: 'ge_L81', id: 'unit_L81', side: 'defender', hex: { col: 38, row: 9 } },
+  { templateId: 'ge_L80', id: 'unit_L80', side: 'defender', hex: { col: 29, row: 4 } },
+  { templateId: 'ge_L70', id: 'unit_L70', side: 'defender', hex: { col: 39, row: 3 } },
+  { templateId: 'ge_MMG', id: 'geMMG_vG8',   side: 'defender', possessorId: 'unit_01' },
+  { templateId: 'ge_LMG', id: 'geLMG_vH2',   side: 'defender', possessorId: 'unit_07' },
+  { templateId: 'ge_LMG', id: 'geLMG_uAC4',  side: 'defender', possessorId: 'unit_04' },
+  { templateId: 'ge_LMG', id: 'geLMG_vH2_2', side: 'defender', possessorId: 'unit_08' },
+
+  // --- Russian (attacker) ---
+  { templateId: 'so_628', id: 'unit_ru1', side: 'attacker', hex: { col: 36, row: 6 } },
+  { templateId: 'so_628', id: 'unit_ru2', side: 'attacker', hex: { col: 36, row: 5 } },
+  { templateId: 'so_628', id: 'unit_ru3', side: 'attacker', hex: { col: 31, row: 7 } },
+  { templateId: 'so_628', id: 'unit_ru4', side: 'attacker', hex: { col: 32, row: 7 } },
+  { templateId: 'so_426', id: 'unit_ru5', side: 'attacker', hex: { col: 25, row: 6 } },
+  { templateId: 'so_426', id: 'unit_ru6', side: 'attacker', hex: { col: 25, row: 6 } },
+  { templateId: 'so_426', id: 'unit_ru7', side: 'attacker', hex: { col: 25, row: 6 } },
+  { templateId: 'so_426', id: 'unit_ru8', side: 'attacker', hex: { col: 24, row: 5 } },
+  { templateId: 'so_426', id: 'unit_ru9', side: 'attacker', hex: { col: 24, row: 5 } },
+  { templateId: 'so_426', id: 'unit_ru10', side: 'attacker', hex: { col: 24, row: 5 } },
+  { templateId: 'so_426', id: 'unit_ru11', side: 'attacker', hex: { col: 24, row: 5 } },
+  { templateId: 'so_L81', id: 'unit_ruL81', side: 'attacker', hex: { col: 25, row: 6 } },
+
+  // --- American (attacker) ---
+  { templateId: 'am_667', id: 'unit_am1', side: 'attacker', hex: { col: 48, row: 5 } },   // vQ4
+  { templateId: 'am_667', id: 'unit_am2', side: 'attacker', hex: { col: 48, row: 5 } },
+  { templateId: 'am_667', id: 'unit_am3', side: 'attacker', hex: { col: 48, row: 5 } },
+  { templateId: 'am_667', id: 'unit_am4', side: 'attacker', hex: { col: 48, row: 4 } },   // vQ3
+  { templateId: 'am_667', id: 'unit_am5', side: 'attacker', hex: { col: 48, row: 4 } },
+  { templateId: 'am_667', id: 'unit_am6', side: 'attacker', hex: { col: 48, row: 4 } },
+  { templateId: 'am_536', id: 'unit_am7', side: 'attacker', hex: { col: 48, row: 11 } },  // vQ10
+  { templateId: 'am_536', id: 'unit_am8', side: 'attacker', hex: { col: 48, row: 11 } },
+  { templateId: 'am_536', id: 'unit_am9', side: 'attacker', hex: { col: 48, row: 11 } },
+  { templateId: 'am_536', id: 'unit_am10', side: 'attacker', hex: { col: 48, row: 10 } }, // vQ9
+  { templateId: 'am_536', id: 'unit_am11', side: 'attacker', hex: { col: 48, row: 10 } },
+  { templateId: 'am_L92', id: 'unit_amL92', side: 'attacker', hex: { col: 48, row: 5 } },
+  { templateId: 'am_L81', id: 'unit_amL81', side: 'attacker', hex: { col: 48, row: 11 } },
+  { templateId: 'am_MMG', id: 'amMMG_vQ4',  side: 'attacker', possessorId: 'unit_am1' },
 ]
 
 function loadImage(src) {
@@ -321,6 +368,7 @@ export async function createAndLoadUnits(layer) {
         const template = {
             ...tmpl,
             id: record.id,
+            side: record.side,   // 'attacker' | 'defender' — из сценария
             hex: resolvedHex,
             path: [{ hex: resolvedHex, isRoad: Rules._isRoadHex(resolvedHex) }],
         };
@@ -346,8 +394,8 @@ export async function createAndLoadUnits(layer) {
 }
 
 // Создать юнит из шаблона в указанном гексе — для замены на HS и т.п.
-export async function spawn_unit(templateId, id, hex, layer) {
-    const template = { ...TEMPLATES[templateId], id, hex,
+export async function spawn_unit(templateId, id, hex, layer, side = null) {
+    const template = { ...TEMPLATES[templateId], id, hex, side,
                        path: [{ hex, isRoad: Rules._isRoadHex(hex) }] };
     template.elr   = template.lowerQuality ? (State.elr[template.nation] ?? 3) : 20;
     const image    = await loadImage(template.src);

@@ -48,8 +48,11 @@ export const COL_COUNT = Math.ceil(BOARD_W / COL_STEP);
 export const ROW_COUNT = Math.ceil(WORLD_H / HEX_H);
 
 
+// Пиксель → новые координаты (col-row в единой системе, origin над uB1 = "0-1").
+// Внутри работаем в старой системе (old_col in [-COL_COUNT, COL_COUNT-1], old_row in [1, ROW_COUNT]),
+// потом сдвигаем: new_col = old_col + COL_COUNT − 1; new_row = old_row + 1.
+// Т.е. uB1 (old col=-32, row=1) → new (0, 2), а origin new (0,1) = old (-32, 0).
 export function pixelToHex(px, py) {
-  // линейная оценка + итеративная коррекция под квадратичный дрифт (со знаком)
   let col = Math.round((px - GRID_OFFSET_X) / COL_STEP);
   for (let iter = 0; iter < 3; iter++) {
     const coef = col >= 0 ? DRIFT_COEF : DRIFT_COEF_LEFT;
@@ -62,22 +65,14 @@ export function pixelToHex(px, py) {
   const isOdd = ((clampedCol % 2) + 2) % 2 === 1;
   const yAdjusted = py - GRID_OFFSET_Y - (isOdd ? ODD_OFFSET : 0);
   const row = Math.round(yAdjusted / HEX_H) + 1;
-  const clampedRow = Math.max(1, Math.min(ROW_COUNT, row));
-  return { col: clampedCol, row: clampedRow };
+  const clampedRow = Math.max(0, Math.min(ROW_COUNT, row));
+  return { col: clampedCol + COL_COUNT - 1, row: clampedRow + 1 };
 }
 
-// A-Z (0..25) → одна буква; далее AA, AB, AC, ... (последовательные)
-function colToLetters(col) {
-  const alpha = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
-  if (col < 26) return alpha[col];
-  return 'A' + alpha[col - 26];
-}
-
-// V-карта: col >= 0 → vA (col=0), vB, ..., vZ, vAA, ...
-// U-карта: col <  0 → uA (col=-COL_COUNT, левый край), ..., uGG (col=-1, правый край U)
+// Единый world-label: "col-row" (col — колонка, row — ряд).
+// Origin (0, 1) = хекс прямо над uB1 в старой системе.
 export function hexLabel(col, row) {
-  if (col >= 0) return 'v' + colToLetters(col) + row;
-  return 'u' + colToLetters(COL_COUNT + col) + row;
+  return `${col}-${row}`;
 }
 
 // Соседи в odd-q offset раскладке (нечётные столбцы сдвинуты вниз)
@@ -107,17 +102,24 @@ function offsetToCube(col, row) {
 }
 
 // Расстояние между двумя гексами в гексах (соседние = 1)
+// Совпадают ли hex'ы по (col, row).
+export function isSameHex(a, b) {
+  return a.col === b.col && a.row === b.row;
+}
+
 export function hexDistance(a, b) {
   const ca = offsetToCube(a.col, a.row);
   const cb = offsetToCube(b.col, b.row);
   return (Math.abs(ca.x - cb.x) + Math.abs(ca.y - cb.y) + Math.abs(ca.z - cb.z)) / 2;
 }
 
+// Новые координаты → пиксель. Конвертируем в старые (see pixelToHex).
 export function hexToPixel(col, row) {
-  // раздельные коэффициенты влево/вправо, знак от col
-  const coef = col >= 0 ? DRIFT_COEF : DRIFT_COEF_LEFT;
-  const x = GRID_OFFSET_X + col * COL_STEP + col * Math.abs(col) * coef;
-  const isOdd = ((col % 2) + 2) % 2 === 1;
-  const y = GRID_OFFSET_Y + (row - 1) * HEX_H + (isOdd ? ODD_OFFSET : 0);
+  const oldCol = col - (COL_COUNT - 1);
+  const oldRow = row - 1;
+  const coef = oldCol >= 0 ? DRIFT_COEF : DRIFT_COEF_LEFT;
+  const x = GRID_OFFSET_X + oldCol * COL_STEP + oldCol * Math.abs(oldCol) * coef;
+  const isOdd = ((oldCol % 2) + 2) % 2 === 1;
+  const y = GRID_OFFSET_Y + (oldRow - 1) * HEX_H + (isOdd ? ODD_OFFSET : 0);
   return { x, y };
 }

@@ -15,6 +15,7 @@ export const State = {
     residualFP: {},                    // { "col,row": fp } — Residual FP counters по хексам (3.3.5)
     dynamicTerrain: {},                // { "col,row": ['smoke', ...] } — runtime terrain overlay
     elr: { german: 3, soviet: 3 },     // Experience Level Rating по силе (5.1)
+    orchardInSeason: true,             // апр-окт: orchard блокирует LoS между разными elevation
 
     // массив подписчиков (Positioning, Renderer и т.д.)
     subscribers: [],

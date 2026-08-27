@@ -3,9 +3,7 @@
 // pixel_is_on_Obstacle_set принимает мировые координаты и для каждой карты
 // переводит мировой пиксель в локальный, проверяет Set-ы.
 
-import { cards as cardRegistry } from './cards.js';
-
-// Размеры одной карты (совпадают с cards.js CARD_ROWS * HEX_H ≈ 645, ширина 1800)
+// Размеры одной карты (совпадают с CARD_ROWS * HEX_H ≈ 645, ширина 1800)
 const CARD_W = 1800;
 const CARD_H = 645;
 
@@ -25,7 +23,7 @@ export async function initTerrainLOS() {
     for (const [cardName, cardData] of Object.entries(data)) {
         const sets = {};
         for (const [key, val] of Object.entries(cardData)) {
-            if (key === 'xOffset' || key === 'yOffset') continue;
+            if (key === 'xOffset' || key === 'yOffset' || key === 'rotation') continue;
             const s = new Set();
             for (const [x, y] of val) s.add(`${x},${y}`);
             sets[key] = s;
@@ -33,7 +31,7 @@ export async function initTerrainLOS() {
         cards[cardName] = {
             xOffset: cardData.xOffset ?? 0,
             yOffset: cardData.yOffset ?? 0,
-            rotation: cardRegistry[cardName]?.rotation ?? 0,
+            rotation: cardData.rotation ?? 0,
             sets,
         };
     }
@@ -42,7 +40,7 @@ export async function initTerrainLOS() {
         const card = cards[cardName];
         if (!card) continue;
         for (const [key, val] of Object.entries(cardData)) {
-            if (key === 'xOffset' || key === 'yOffset') continue;
+            if (key === 'xOffset' || key === 'yOffset' || key === 'rotation') continue;
             const s = new Set();
             for (const [x, y] of val) s.add(`${x},${y}`);
             card.sets[key] = s;

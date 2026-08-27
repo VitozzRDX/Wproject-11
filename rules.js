@@ -1,4 +1,4 @@
-import { hexDistance, hexLabel, hexToPixel, pixelToHex } from './hexUtils.js';
+import { hexDistance, hexLabel, hexToPixel, pixelToHex, isSameHex } from './hexUtils.js';
 import { terrainAt } from './cards.js';
 import { bresenham, pixel_is_on_Obstacle_set, setLastHit } from './terrainLOS.js';
 
@@ -61,9 +61,13 @@ const TEM = {
     pavedRoad:      0,
 };
 
-function calcTEM(hex) {
+function calcTEM(hex, hexUnits = []) {
     const terrain = terrainAt(hex.col, hex.row);
     if (terrain.length === 0) return 0;
+    // Woods-Road: если юнит в hex'e выбрал UseWoods (usedWoodsRoad=true) → forest TEM.
+    if (terrain.includes('Woods-Road') && hexUnits.some(u => u.usedWoodsRoad)) {
+        return TEM.forest;
+    }
     return Math.max(0, ...terrain.map(t => TEM[t] ?? 0));
 }
 
@@ -113,7 +117,7 @@ function calcHeightAdvantage(shooterHexes, targetHex, hexUnits = []) {
     const targetElev     = calcElevation(targetHex);
     const minShooterElev = Math.min(...shooterHexes.map(h => calcElevation(h)));
     if (minShooterElev >= targetElev) return 0;
-    if (calcTEM(targetHex) > 0)       return 0;
+    if (calcTEM(targetHex, hexUnits) > 0) return 0;
 
     // Exception (ASL): unit не получает HA если, входя в target-хекс, пересекает crest line
     // через тот же hexside, что и firer's LoS входит в target-хекс.
@@ -126,7 +130,7 @@ function calcHeightAdvantage(shooterHexes, targetHex, hexUnits = []) {
             const allMatch = shooterHexes.every(sHex => {
                 const hexPath  = _hexLine(sHex, targetHex);
                 const losEntry = hexPath[hexPath.length - 2];
-                return losEntry.col === prevHex.col && losEntry.row === prevHex.row;
+                return isSameHex(losEntry, prevHex);
             });
             if (allMatch) return 0;
         }
@@ -152,51 +156,33 @@ function _calcSmokeDRM(sHex, targetHex, hexPath) {
         const t = terrainAt(h.col, h.row);
         const drm = t.map(s => SMOKE_DRM[s]).find(v => v);   // первый найденный smoke в терпейне
         if (!drm) continue;
-        if (h.col === sHex.col && h.row === sHex.row) d += 1;   // fire out of smoke
+        if (isSameHex(h, sHex)) d += 1;   // fire out of smoke
         else d += drm;                                            // through / into
     }
     return d;
 }
 
-// Hex line через cube-координаты (Red Blob Games) — O(N) без drift-итераций
-function _offsetToCube(col, row) {
-    const x = col;
-    const z = row - (col - (col & 1)) / 2;
-    return { x, y: -x - z, z };
-}
-function _cubeToOffset(c) {
-    const col = c.x;
-    const row = c.z + (col - (col & 1)) / 2;
-    return { col, row };
-}
-function _cubeRound(c) {
-    let rx = Math.round(c.x), ry = Math.round(c.y), rz = Math.round(c.z);
-    const dx = Math.abs(rx - c.x), dy = Math.abs(ry - c.y), dz = Math.abs(rz - c.z);
-    if (dx > dy && dx > dz)      rx = -ry - rz;
-    else if (dy > dz)            ry = -rx - rz;
-    else                          rz = -rx - ry;
-    return { x: rx, y: ry, z: rz };
-}
+// Pixel-based hex line: пробегает пиксели Bresenham'ом от центра fromHex до
+// центра toHex, конвертирует каждый в hex через pixelToHex, дедуп подряд идущих.
+// Использовать для hindrance/smoke DRM — соответствует пиксельной геометрии LoS.
 function _hexLine(fromHex, toHex) {
-    const a = _offsetToCube(fromHex.col, fromHex.row);
-    const b = _offsetToCube(toHex.col, toHex.row);
-    const N = hexDistance(fromHex, toHex);
-    const out = [];
-    for (let i = 0; i <= N; i++) {
-        const t = N === 0 ? 0 : i / N;
-        const c = _cubeRound({
-            x: a.x + (b.x - a.x) * t,
-            y: a.y + (b.y - a.y) * t,
-            z: a.z + (b.z - a.z) * t,
-        });
-        out.push(_cubeToOffset(c));
+    const from = hexToPixel(fromHex.col, fromHex.row);
+    const to   = hexToPixel(toHex.col, toHex.row);
+    const out  = [];
+    let prevKey = null;
+    for (const { x, y } of bresenham(from.x, from.y, to.x, to.y)) {
+        const h   = pixelToHex(x, y);
+        const key = `${h.col},${h.row}`;
+        if (key === prevKey) continue;
+        out.push(h);
+        prevKey = key;
     }
     return out;
 }
 
 // hex h есть в списке list?
 function _hexInList(h, list) {
-    return list.some(x => x.col === h.col && x.row === h.row);
+    return list.some(x => isSameHex(x, h));
 }
 
 // Разбивает массив хексов на группы связанных соседей (hexDistance === 1) через BFS
@@ -225,9 +211,9 @@ function array_of_adjacent_Hexes_arrays(hexes) {
 }
 
 // Отсеивает хексы стрелков, у которых нет LoS до target или hindrance ≥ 6
-function filter_hexes_with_Los(hexes, targetHex) {
+function filter_hexes_with_Los(hexes, targetHex, orchardInSeason = false) {
     return hexes.filter(h =>
-        checkLOS(h, targetHex) && checkHindrance([h], targetHex) < 6
+        checkLOS(h, targetHex, orchardInSeason) && checkHindrance([h], targetHex) < 6
     );
 }
 
@@ -244,8 +230,8 @@ function _los_stays_on_road_in_Orchard(shooterHex, targetHex, hexPath) {
     for (const { x, y } of bresenham(from.x, from.y, to.x, to.y)) {
         // Пропускаем пиксели в shooter/target хексе — road-outline там не считается crossing
         const h = pixelToHex(x, y);
-        if (h.col === shooterHex.col && h.row === shooterHex.row) continue;
-        if (h.col === targetHex.col   && h.row === targetHex.row)   continue;
+        if (isSameHex(h, shooterHex)) continue;
+        if (isSameHex(h, targetHex))  continue;
         if (pixel_is_on_Obstacle_set('roads', x, y)) {
             anyRoadCrossing = true;
             roadHitPx = { x, y };
@@ -277,8 +263,8 @@ function checkHindrance(shooterHexes, targetHex) {
         let total = _calcSmokeDRM(sHex, targetHex, hexPath);
         if (_los_stays_on_road_in_Orchard(sHex, targetHex, hexPath)) return total;
         for (const h of hexPath) {
-            if (h.col === sHex.col       && h.row === sHex.row)       continue;
-            if (h.col === targetHex.col  && h.row === targetHex.row)  continue;
+            if (isSameHex(h, sHex))      continue;
+            if (isSameHex(h, targetHex)) continue;
             const terrain = terrainAt(h.col, h.row);
             for (const t of terrain) {
                 if (HINDRANCE_TERRAINS.includes(t)) total += 1;
@@ -291,7 +277,7 @@ function checkHindrance(shooterHexes, targetHex) {
 // Чистая геометрическая проверка LoS между двумя хексами (fromHex → toHex).
 // Возвращает true, если LoS не заблокирован препятствиями.
 // Hindrance-порог (>=6) вынесен наружу — здесь только геометрия.
-function checkLOS(fromHex, toHex) {
+function checkLOS(fromHex, toHex, orchardInSeason = false) {
     setLastHit(null);
 
     // Elevation концов: hill-хекс = level 1, иначе 0 (crestLine тоже level 1 по "hex center dot")
@@ -311,13 +297,19 @@ function checkLOS(fromHex, toHex) {
         const h = pixelToHex(x, y);
 
         // Пиксели from-хекса не блокируют — стрелок стоит там, а не смотрит сквозь свой террейн
-        if (h.col === fromHex.col && h.row === fromHex.row) continue;
+        if (isSameHex(h, fromHex)) continue;
         // Первый же пиксель в to-хексе — прерываем: все дальнейшие тоже там
-        if (h.col === toHex.col   && h.row === toHex.row)   break;
+        if (isSameHex(h, toHex))   break;
 
         // Пиксель LoS попал в hill-хекс? (crestLine тоже level 1)
         const pTerrain = terrainAt(h.col, h.row);
         const pixel_of_LoS_is_on_hex_with_Hill = pTerrain.includes('hill') || pTerrain.includes('crestLine');
+
+        // Правило: in-season orchard блокирует LoS между стрелком и целью на разных elevation'ах.
+        if (orchardInSeason && fHill !== tHill && pTerrain.includes('orchard')) {
+            setLastHit({ x, y, type: 'orchard' });
+            return false;
+        }
 
         // Проверяем каждый тип препятствия
         for (const type of OBSTACLES) {
@@ -357,7 +349,7 @@ function calcFFNAM(unit) {
 function calcFFMO(unit, targetHex, treeLinedShield = false) {
     if (!unit.hasStartedMoving) return 0;
     if (unit.pinned)            return 0;
-    if (calcTEM(targetHex) > 0) return 0;
+    if (calcTEM(targetHex, [unit]) > 0) return 0;
     // orchard не Open Ground — отменяет FFMO,
     // ЗА ИСКЛЮЧЕНИЕМ tree-lined road shield (правило Orchard-Road)
     const terrain = terrainAt(targetHex.col, targetHex.row);
@@ -761,11 +753,11 @@ function applyFireEffect(effect, targets) {
 // KEU = unconcealed enemy unit к которому у нас есть LOS.
 // Пока LOS всегда true (кроме hindrance≥6), concealment не реализовано.
 // Когда добавятся геометрия/сокрытие — семантика будет корректна автоматически.
-function _closest_enemy_distance(shooter, units) {
+function _closest_enemy_distance(shooter, units, orchardInSeason = false) {
     let min = Infinity;
     for (const u of Object.values(units)) {
         if (u.nation === shooter.nation) continue;
-        if (!checkLOS(shooter.hex, u.hex)) continue;                 // геометрия LoS блокирована → не KEU
+        if (!checkLOS(shooter.hex, u.hex, orchardInSeason)) continue;   // геометрия LoS блокирована → не KEU
         if (checkHindrance([shooter.hex], u.hex) >= 6) continue;     // hindrance-порог тоже блокирует
         // TODO: concealed check когда появится (u.concealed)
         const d = hexDistance(shooter.hex, u.hex);
@@ -788,7 +780,7 @@ function _check_FPF_valid(firegroupUnits, targetHex) {
 }
 
 // SFF-precondition: любой SFF-стрелок в FG обязан быть в normal range И не дальше ближайшего KEU
-function _check_SFF_valid(firegroupUnits, targetHex, units) {
+function _check_SFF_valid(firegroupUnits, targetHex, units, orchardInSeason = false) {
     for (const u of firegroupUnits) {
         if (u.firingStatus !== 'FirstFire') continue;   // не SFF — пропускаем
         const dist = hexDistance(u.hex, targetHex);
@@ -796,7 +788,7 @@ function _check_SFF_valid(firegroupUnits, targetHex, units) {
             console.log(`[SFF blocked] ${u.id}: dist ${dist} > normal range ${u.range}`);
             return false;
         }
-        const closest = _closest_enemy_distance(u, units);
+        const closest = _closest_enemy_distance(u, units, orchardInSeason);
         if (dist > closest) {
             console.log(`[SFF blocked] ${u.id}: dist ${dist} > closest KEU distance ${closest}`);
             return false;
@@ -814,7 +806,7 @@ function residualAttack(residualFP, targetUnits, targetHex) {
 
     const dr  = roll2d6();
 
-    const tem     = calcTEM(targetHex);
+    const tem     = calcTEM(targetHex, targetUnits);
     const ffnam   = targetUnits.length > 0 ? calcFFNAM(targetUnits[0]) : 0;
     const ffmoRaw = targetUnits.length > 0 ? calcFFMO(targetUnits[0], targetHex, false) : 0;
     // TEM в target отменяет FFMO
@@ -834,8 +826,8 @@ function residualAttack(residualFP, targetUnits, targetHex) {
     return applyFireEffect(arr[idx], targetUnits);
 }
 
-function defensiveFF(firegroupUnits, targetHex, hexUnits, units) {
-    if (!_check_SFF_valid(firegroupUnits, targetHex, units)) {
+function defensiveFF(firegroupUnits, targetHex, hexUnits, units, orchardInSeason = false) {
+    if (!_check_SFF_valid(firegroupUnits, targetHex, units, orchardInSeason)) {
         console.log('[defensiveFF] SFF constraint violated — атака отменена');
         return null;
     }
@@ -853,7 +845,7 @@ function defensiveFF(firegroupUnits, targetHex, hexUnits, units) {
 
     // Геометрический LoS — от каждого хекса стрелков; блокировка хотя бы одного = нет LoS
     const shooterHexes = firegroupUnits.map(u => u.hex);
-    const losOk        = shooterHexes.every(h => checkLOS(h, targetHex));
+    const losOk        = shooterHexes.every(h => checkLOS(h, targetHex, orchardInSeason));
     const hindrance    = checkHindrance(shooterHexes, targetHex);
     const los          = losOk && hindrance < 6;
     console.log(`[defensiveFF] LOS=${los}`);
@@ -862,7 +854,7 @@ function defensiveFF(firegroupUnits, targetHex, hexUnits, units) {
         return { changes: {} };
     }
 
-    const baseTem       = calcTEM(targetHex);
+    const baseTem       = calcTEM(targetHex, hexUnits);
     const shooterHexesForHA = firegroupUnits.map(u => u.hex);
     const ha                = calcHeightAdvantage(shooterHexesForHA, targetHex, hexUnits);
     const tem           = baseTem > 0 ? baseTem : ha;
@@ -935,7 +927,7 @@ function checkOverstack(targetHex, movementGroup, units) {
 
     Object.values(units).forEach(u => {
         if (movementGroup.includes(u.id)) return;
-        const inTargetHex = u.hex?.col === targetHex.col && u.hex?.row === targetHex.row;
+        const inTargetHex = u.hex && isSameHex(u.hex, targetHex);
         if (!inTargetHex) return;
         countUnit(u);
     });
@@ -982,7 +974,7 @@ function _check_link_for_firing_group(unit, fg, units) {
 function _check_if_unit_is_in_same_hex_as_fg(unit, fg, units) {
     return fg.some(id => {
         const u = units[id];
-        return u.hex.col === unit.hex.col && u.hex.row === unit.hex.row;
+        return isSameHex(u.hex, unit.hex);
     });
 }
 
@@ -1151,7 +1143,7 @@ export const Rules = {
 
         const isInSameHex = unit.hex.col === movementStackHex.col &&
                             unit.hex.row === movementStackHex.row;
-        const isActiveSide = unit.nation === activeSide;
+        const isActiveSide = unit.side === activeSide;
         if (!(isInSameHex && isActiveSide)) return false;
 
         // не смешиваем двинувшихся с не-двинувшимися
@@ -1173,10 +1165,10 @@ export const Rules = {
             // хозяин не в форме — оружие не стреляет
             if (possessor.broken || possessor.pinned) return false;
             // Национальность weapon = национальность possessor'а (можно владеть трофейным)
-            if (possessor.nation !== defSide) return false;
+            if (possessor.side !== defSide) return false;
         } else {
             // Своя национальность у пехоты
-            if (unit.nation !== defSide) return false;
+            if (unit.side !== defSide) return false;
         }
 
         // Общие правила смежности (те же для пехоты и weapon)
@@ -1233,7 +1225,7 @@ export const Rules = {
                 w.category === 'carried' &&
                 w.possessorId === null &&
                 !w.movedThisMPh &&
-                w.hex?.col === u.hex.col && w.hex?.row === u.hex.row
+                w.hex && isSameHex(w.hex, u.hex)
             );
             if (weapon) return { unitId: uid, weaponId: weapon.id };
         }

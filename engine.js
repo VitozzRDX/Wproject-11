@@ -1,7 +1,7 @@
 import { State } from './state.js';
 import { Rules } from './rules.js';
 import { PhaseManager } from './phase_manager.js';
-import { pixelToHex, hexToPixel, hexLabel, hexDistance } from './hexUtils.js';
+import { pixelToHex, hexToPixel, hexLabel, hexDistance, isSameHex } from './hexUtils.js';
 import { UIState } from './uiState.js';
 import { spawn_unit } from './unitloading.js';
 import { getLastHit } from './terrainLOS.js';
@@ -113,7 +113,7 @@ const handlers = {
         }
 
         // Отсеиваем хексы стрелков без LoS/hindrance, разбиваем оставшиеся на adjacency-компоненты (sub-FGs)
-        const validHexes = Rules.filter_hexes_with_Los(State.fireGroupHexesArray, targetHex);
+        const validHexes = Rules.filter_hexes_with_Los(State.fireGroupHexesArray, targetHex, State.orchardInSeason);
         console.log(`[DFF] valid ${validHexes.length}/${State.fireGroupHexesArray.length} shooter hexes`);
 
         // Всегда рисуем LoS-линии от всех стрелков FG и точку блока (если был),
@@ -136,7 +136,7 @@ const handlers = {
 
             console.log(`[DFF] sub-FG hexes=${hexesArr.map(h=>`(${h.col},${h.row})`).join(',')} units=${subFG.map(u=>u.id).join(',')}`);
 
-            const result = Rules.defensiveFF(subFG, targetHex, movedTargets, State.units);
+            const result = Rules.defensiveFF(subFG, targetHex, movedTargets, State.units, State.orchardInSeason);
             if (result === null) continue;   // SFF/FPF нарушено для этой sub-FG — пропускаем
 
             subFG.forEach(u => firedUnits.add(u.id));   // отмечаем реально стрелявших
@@ -153,6 +153,13 @@ const handlers = {
                 console.log(`[residual] ${hexKey} → ${result.residualFP}`);
             }
         }
+
+        // Стрелки без LoS (или hindrance ≥ 6) отфильтрованы из sub-FG splitting,
+        // но по правилам считаются выстрелившими — firingStatus продвигается, эффекта нет.
+        firegroupUnits.forEach(u => {
+            const hasLos = validHexes.some(h => isSameHex(h, u.hex));
+            if (!hasLos) firedUnits.add(u.id);
+        });
 
         // Финал: firingStatus counters — только тем, кто реально стрелял (weapons с RoF сохраняют статус)
         firegroupUnits.forEach(u => {
@@ -360,7 +367,7 @@ function _recordFiredFrom(firegroupUnits, hexUnits) {
 function _drawLOS(shooterHexes, targetHex, validHexes) {
     const targetCenter = hexToPixel(targetHex.col, targetHex.row);
     shooterHexes.forEach(h => {
-        const isValid = validHexes.some(v => v.col === h.col && v.row === h.row);
+        const isValid = validHexes.some(v => isSameHex(v, h));
         UIState.flashLOS(
             hexToPixel(h.col, h.row),
             targetCenter,
@@ -418,6 +425,7 @@ function _replace_unit(oldId, newTemplateId, newId) {
 
     const hex   = old.hex;
     const layer = old.node.getLayer();
+    const side  = old.side;   // роль наследуется — новый HS/reduced юнит той же стороны
 
     // Список weapons possessed старым юнитом — переедут на нового (reduce ≠ гибель)
     const inheritedWeapons = Object.values(State.units)
@@ -430,7 +438,7 @@ function _replace_unit(oldId, newTemplateId, newId) {
 
     flipReplaceUnit(old.node, async () => {
         _remove_unit(oldId);   // временно сбросит possessorId у weapons — восстановим ниже
-        const newUnit = await spawn_unit(newTemplateId, newId, hex, layer);
+        const newUnit = await spawn_unit(newTemplateId, newId, hex, layer, side);
         for (const [key, val] of Object.entries(inherit)) {
             if (val) State.setUnit(newId, key, true);
         }
@@ -519,7 +527,7 @@ function _movedTargetsInHex(targetHex) {
     const moved = State.moved_movement_group || [];
     return moved
         .map(id => State.units[id])
-        .filter(u => u.hex.col === targetHex.col && u.hex.row === targetHex.row);
+        .filter(u => isSameHex(u.hex, targetHex));
 }
 
 // Выполнить мув с возможным overrideTerrain (UseWoods='forest' / UseRoad='dirtRoad')
@@ -674,7 +682,7 @@ function _addToMovementGroup(unitId) {
         unit   = State.units[unitId];
     }
 
-    const activeSide = PhaseManager.getActiveSide();
+    const activeSide = PhaseManager.getActiveRole();
 
     // Если movementStackHex не установлен, записываем гекс текущего юнита
     if (!State.movementStackHex) {
@@ -730,7 +738,7 @@ function _refreshMGButtons() {
 
 function _addToFireGroup(unitId) {
     const unit = State.units[unitId];
-    const defSide = PhaseManager.getDefendingSide();
+    const defSide = PhaseManager.getDefendingRole();
 
     if (!Rules.checkIfAddingToFireGroupIsValid(unit, defSide, State.fireGroup, State.units)) {
         return;

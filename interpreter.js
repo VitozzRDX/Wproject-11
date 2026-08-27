@@ -99,7 +99,7 @@ const RULES = [
                 noShift:               ctx => !ctx.shiftKey,
                 leftClick:       ctx => ctx.button !== 2,
                 hasUnit:   ctx => ctx.unitId !== undefined,
-                clickedSideIsAttacker: ctx => State.units[ctx.unitId].nation === PhaseManager.getActiveSide(),
+                clickedSideIsAttacker: ctx => State.units[ctx.unitId].side === PhaseManager.getActiveRole(),
                 movingGroupIsEmpty: () => State.movementGroup.length === 0,
                 fireGroupIsEmpty:   () => State.fireGroup.length === 0,
             },
@@ -107,7 +107,7 @@ const RULES = [
                 shift :       ctx => ctx.shiftKey,
                 leftClick:       ctx => ctx.button !== 2,
                 hasUnit:   ctx => ctx.unitId !== undefined,
-                clickedSideIsAttacker: ctx => State.units[ctx.unitId].nation === PhaseManager.getActiveSide(),
+                clickedSideIsAttacker: ctx => State.units[ctx.unitId].side === PhaseManager.getActiveRole(),
                 movingGroupIsNotEmpty: () => State.movementGroup.length > 0,
                 fireGroupIsEmpty:      () => State.fireGroup.length === 0,
             }
@@ -119,7 +119,7 @@ const RULES = [
             {
                 leftClick:       ctx => ctx.button !== 2,
                 hasUnit:   ctx => ctx.unitId !== undefined,
-                clickedSideIsDefender: ctx => State.units[ctx.unitId].nation === PhaseManager.getDefendingSide(),
+                clickedSideIsDefender: ctx => State.units[ctx.unitId].side === PhaseManager.getDefendingRole(),
                 fireGroupIsEmpty: () => State.fireGroup.length === 0,
                 mfspent: () => State.mfspent,
             },
@@ -127,7 +127,7 @@ const RULES = [
                 shift :       ctx => ctx.shiftKey,
                 leftClick:       ctx => ctx.button !== 2,
                 hasUnit:   ctx => ctx.unitId !== undefined,
-                clickedSideIsDefender: ctx => State.units[ctx.unitId].nation === PhaseManager.getDefendingSide(),
+                clickedSideIsDefender: ctx => State.units[ctx.unitId].side === PhaseManager.getDefendingRole(),
                 fireGroupIsNotEmpty: () => State.fireGroup.length > 0,
             }
         ],
@@ -147,7 +147,7 @@ const RULES = [
                 leftClick:      ctx => ctx.button !== 2,
                 noFireGroup: () => State.fireGroup.length === 0,
                 // somethingSelected: () => State.selected !== null,
-                // selectedUnitIsAttacker: () => State.units[State.selected].nation === PhaseManager.getActiveSide(),
+                // selectedUnitIsAttacker: () => State.units[State.selected].side === PhaseManager.getActiveRole(),
                 movingGroupIsnotEmpty: () => State.movementGroup.length > 0
             }
         ],
@@ -159,7 +159,7 @@ const RULES = [
                 leftClick:      ctx => ctx.button !== 2,
                 fireGroupIsNotEmpty: () => State.fireGroup.length > 0,
                 hasUnit:   ctx => ctx.unitId !== undefined,
-                clickedSideIsAttacker: ctx => State.units[ctx.unitId].nation === PhaseManager.getActiveSide()
+                clickedSideIsAttacker: ctx => State.units[ctx.unitId].side === PhaseManager.getActiveRole()
             }
         ],
         name: 'DefensiveFirstFire'

@@ -1,5 +1,5 @@
 import { State } from './state.js';
-import { hexToPixel } from './hexUtils.js';
+import { hexToPixel, isSameHex } from './hexUtils.js';
 
 const STEP = 6;   // сдвиг между сущностями в стеке (px)
 
@@ -8,7 +8,7 @@ const STEP = 6;   // сдвиг между сущностями в стеке (p
 //   2) infantry по порядку добавления, и сразу после каждого — его possessed carried
 function _stackOrder(hex) {
     const inHex = Object.values(State.units)
-        .filter(u => u.hex?.col === hex.col && u.hex?.row === hex.row);
+        .filter(u => u.hex && isSameHex(u.hex, hex));
 
     const stack = [];
 

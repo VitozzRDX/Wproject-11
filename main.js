@@ -9,7 +9,7 @@ import { runFireSimulation } from './fireSimulation.js';
 import { runWoundSimulation } from './woundSimulation.js';
 import { initTerrainLOS } from './terrainLOS.js';
 import { hexToPixel, pixelToHex, COL_COUNT, ROW_COUNT, R, hexLabel } from './hexUtils.js';
-import { cards, terrainAt } from './cards.js';
+import { terrainAt } from './cards.js';
 
 const stage = new Konva.Stage({
     container: 'container',
@@ -29,8 +29,10 @@ function loadImage(src) {
 
 function draw_hex_grid(layer) {
     const labelsGroup = new Konva.Group({ listening: false });
-    for (let col = -COL_COUNT; col < COL_COUNT; col++) {
-        for (let row = 1; row <= ROW_COUNT; row++) {
+    // new coords: col in [0, 2*COL_COUNT-1] (uA → col -1 отрицательный, вне канона — пропускаем),
+    // row in [2, ROW_COUNT+1] (row 1 = ряд над uB1, за пределами карты — пропускаем).
+    for (let col = 0; col < 2 * COL_COUNT - 1; col++) {
+        for (let row = 2; row <= ROW_COUNT + 1; row++) {
             const { x, y } = hexToPixel(col, row);
             layer.add(new Konva.RegularPolygon({
                 x, y,
@@ -138,7 +140,8 @@ async function init() {
     await initTerrainLOS();
     await load_and_draw_background();
     await load_and_draw_units();
-    PhaseManager.setPhase('german movement phase');
+    PhaseManager.setPhase('movement');
+    PhaseManager.setActiveRole('attacker');
 
     // --- DEBUG tagging mode ---
     // F — toggle; в режиме клики собирают hex-лейблы в Set (повторный клик = убрать)
@@ -147,12 +150,13 @@ async function init() {
     let _tagMode = false;
 
     stage.on('click', function (e) {
+        const st  = e.target.getStage();
+        const raw = st.getPointerPosition();
+        const pos = { x: raw.x - st.x(), y: raw.y - st.y() };
+        const h   = pixelToHex(pos.x, pos.y);
+        const label = hexLabel(h.col, h.row);
+        console.log(`[click] world(${pos.x.toFixed(1)}, ${pos.y.toFixed(1)}) hex ${label}`);
         if (_tagMode) {
-            const st  = e.target.getStage();
-            const raw = st.getPointerPosition();
-            const pos = { x: raw.x - st.x(), y: raw.y - st.y() };
-            const h   = pixelToHex(pos.x, pos.y);
-            const label = hexLabel(h.col, h.row);
             if (_tagged.has(label)) {
                 _tagged.delete(label);
                 console.log(`[tag] -${label} (total: ${_tagged.size})`);
@@ -212,9 +216,9 @@ async function init() {
             return;
         }
         _overlayLayer = new Konva.Layer({ listening: false });
-        // Все terrain-хексы обеих карт (по всему миру)
-        for (let col = -COL_COUNT; col < COL_COUNT; col++) {
-            for (let row = 1; row <= ROW_COUNT; row++) {
+        // Все terrain-хексы (new coords: col 0..2*COL_COUNT-1, row 2..ROW_COUNT+1)
+        for (let col = 0; col < 2 * COL_COUNT - 1; col++) {
+            for (let row = 2; row <= ROW_COUNT + 1; row++) {
                 const terrain = terrainAt(col, row);
                 if (terrain.length === 0) continue;
                 const { x, y } = hexToPixel(col, row);
