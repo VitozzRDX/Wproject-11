@@ -1,4 +1,4 @@
-import { hexMap } from './hexmapBaked.js';
+import { hexMapU_rot as hexMap } from './hexmapU_rot.js';
 import { State } from './state.js';
 
 // Единый world hexmap: ключ "col-row", значение — массив терпейнов.

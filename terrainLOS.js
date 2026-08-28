@@ -17,7 +17,7 @@ export function setLastHit(v) { _lastHit = v; }
 
 export async function initTerrainLOS() {
     const [data, roadData] = await Promise.all([
-        fetch('./terrainPixels.json').then(r => r.json()),
+        fetch('./terrainPixelsU_rot.json').then(r => r.json()),
         fetch('./roadPixels.json').then(r => r.json()).catch(() => ({})),
     ]);
     for (const [cardName, cardData] of Object.entries(data)) {
