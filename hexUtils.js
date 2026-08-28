@@ -52,7 +52,10 @@ export const ROW_COUNT = Math.ceil(WORLD_H / HEX_H);
 // Внутри работаем в старой системе (old_col in [-COL_COUNT, COL_COUNT-1], old_row in [1, ROW_COUNT]),
 // потом сдвигаем: new_col = old_col + COL_COUNT − 1; new_row = old_row + 1.
 // Т.е. uB1 (old col=-32, row=1) → new (0, 2), а origin new (0,1) = old (-32, 0).
+// Voronoi-nearest: перебираем 3×3 кандидатов вокруг приблизительной оценки col/row,
+// выбираем hex с ближайшим центром (для регулярной hex-сетки Voronoi-ячейка = сам hex).
 export function pixelToHex(px, py) {
+  // Грубая оценка col — с drift-коррекцией.
   let col = Math.round((px - GRID_OFFSET_X) / COL_STEP);
   for (let iter = 0; iter < 3; iter++) {
     const coef = col >= 0 ? DRIFT_COEF : DRIFT_COEF_LEFT;
@@ -61,11 +64,26 @@ export function pixelToHex(px, py) {
     if (dCol === 0) break;
     col += dCol;
   }
-  const clampedCol = Math.max(-COL_COUNT, Math.min(COL_COUNT - 1, col));
-  const isOdd = ((clampedCol % 2) + 2) % 2 === 1;
-  const yAdjusted = py - GRID_OFFSET_Y - (isOdd ? ODD_OFFSET : 0);
-  const row = Math.round(yAdjusted / HEX_H) + 1;
-  const clampedRow = Math.max(0, Math.min(ROW_COUNT, row));
+
+  // Перебираем 3×3 кандидатов вокруг приблизительной оценки, выбираем ближайший центр.
+  let bestCol = col, bestRow = 1, bestD = Infinity;
+  for (let dc = -1; dc <= 1; dc++) {
+    const c = col + dc;
+    const coef = c >= 0 ? DRIFT_COEF : DRIFT_COEF_LEFT;
+    const centerX = GRID_OFFSET_X + c * COL_STEP + c * Math.abs(c) * coef;
+    const isOdd = ((c % 2) + 2) % 2 === 1;
+    const yAdj = py - GRID_OFFSET_Y - (isOdd ? ODD_OFFSET : 0);
+    const rowGuess = Math.round(yAdj / HEX_H) + 1;
+    for (let dr = -1; dr <= 1; dr++) {
+      const r = rowGuess + dr;
+      const centerY = GRID_OFFSET_Y + (r - 1) * HEX_H + (isOdd ? ODD_OFFSET : 0);
+      const d = (centerX - px) ** 2 + (centerY - py) ** 2;
+      if (d < bestD) { bestD = d; bestCol = c; bestRow = r; }
+    }
+  }
+
+  const clampedCol = Math.max(-COL_COUNT, Math.min(COL_COUNT - 1, bestCol));
+  const clampedRow = Math.max(0, Math.min(ROW_COUNT, bestRow));
   return { col: clampedCol + COL_COUNT - 1, row: clampedRow + 1 };
 }
 

@@ -101,59 +101,6 @@ const TEMPLATES = {
               src: './graf/amMMG.gif', brokenSrc: './graf/amMMGb.gif' },
 };
 
-// ---------------------------------------------------------------------------
-// Сценарий
-// ---------------------------------------------------------------------------
-const scenario = [
-  // --- German (defender) ---
-  { templateId: 'ge_467', id: 'unit_01', side: 'defender', hex: { col: 38, row: 9 } },   // vG8
-  { templateId: 'ge_467', id: 'unit_02', side: 'defender', hex: { col: 38, row: 9 } },
-  { templateId: 'ge_467', id: 'unit_03', side: 'defender', hex: { col: 38, row: 9 } },
-  { templateId: 'ge_447', id: 'unit_04', side: 'defender', hex: { col: 29, row: 4 } },   // moved from 27-5 → 29-4
-  { templateId: 'ge_447', id: 'unit_05', side: 'defender', hex: { col: 29, row: 4 } },
-  { templateId: 'ge_447', id: 'unit_06', side: 'defender', hex: { col: 29, row: 4 } },
-  { templateId: 'ge_447', id: 'unit_07', side: 'defender', hex: { col: 39, row: 3 } },   // vH2
-  { templateId: 'ge_447', id: 'unit_08', side: 'defender', hex: { col: 39, row: 3 } },
-  { templateId: 'ge_447', id: 'unit_09', side: 'defender', hex: { col: 39, row: 3 } },
-  { templateId: 'ge_L81', id: 'unit_L81', side: 'defender', hex: { col: 38, row: 9 } },
-  { templateId: 'ge_L80', id: 'unit_L80', side: 'defender', hex: { col: 29, row: 4 } },
-  { templateId: 'ge_L70', id: 'unit_L70', side: 'defender', hex: { col: 39, row: 3 } },
-  { templateId: 'ge_MMG', id: 'geMMG_vG8',   side: 'defender', possessorId: 'unit_01' },
-  { templateId: 'ge_LMG', id: 'geLMG_vH2',   side: 'defender', possessorId: 'unit_07' },
-  { templateId: 'ge_LMG', id: 'geLMG_uAC4',  side: 'defender', possessorId: 'unit_04' },
-  { templateId: 'ge_LMG', id: 'geLMG_vH2_2', side: 'defender', possessorId: 'unit_08' },
-
-  // --- Russian (attacker) ---
-  { templateId: 'so_628', id: 'unit_ru1', side: 'attacker', hex: { col: 36, row: 6 } },
-  { templateId: 'so_628', id: 'unit_ru2', side: 'attacker', hex: { col: 36, row: 5 } },
-  { templateId: 'so_628', id: 'unit_ru3', side: 'attacker', hex: { col: 31, row: 7 } },
-  { templateId: 'so_628', id: 'unit_ru4', side: 'attacker', hex: { col: 32, row: 7 } },
-  { templateId: 'so_426', id: 'unit_ru5', side: 'attacker', hex: { col: 25, row: 6 } },
-  { templateId: 'so_426', id: 'unit_ru6', side: 'attacker', hex: { col: 25, row: 6 } },
-  { templateId: 'so_426', id: 'unit_ru7', side: 'attacker', hex: { col: 25, row: 6 } },
-  { templateId: 'so_426', id: 'unit_ru8', side: 'attacker', hex: { col: 24, row: 5 } },
-  { templateId: 'so_426', id: 'unit_ru9', side: 'attacker', hex: { col: 24, row: 5 } },
-  { templateId: 'so_426', id: 'unit_ru10', side: 'attacker', hex: { col: 24, row: 5 } },
-  { templateId: 'so_426', id: 'unit_ru11', side: 'attacker', hex: { col: 24, row: 5 } },
-  { templateId: 'so_L81', id: 'unit_ruL81', side: 'attacker', hex: { col: 25, row: 6 } },
-
-  // --- American (attacker) ---
-  { templateId: 'am_667', id: 'unit_am1', side: 'attacker', hex: { col: 48, row: 5 } },   // vQ4
-  { templateId: 'am_667', id: 'unit_am2', side: 'attacker', hex: { col: 48, row: 5 } },
-  { templateId: 'am_667', id: 'unit_am3', side: 'attacker', hex: { col: 48, row: 5 } },
-  { templateId: 'am_667', id: 'unit_am4', side: 'attacker', hex: { col: 48, row: 4 } },   // vQ3
-  { templateId: 'am_667', id: 'unit_am5', side: 'attacker', hex: { col: 48, row: 4 } },
-  { templateId: 'am_667', id: 'unit_am6', side: 'attacker', hex: { col: 48, row: 4 } },
-  { templateId: 'am_536', id: 'unit_am7', side: 'attacker', hex: { col: 48, row: 11 } },  // vQ10
-  { templateId: 'am_536', id: 'unit_am8', side: 'attacker', hex: { col: 48, row: 11 } },
-  { templateId: 'am_536', id: 'unit_am9', side: 'attacker', hex: { col: 48, row: 11 } },
-  { templateId: 'am_536', id: 'unit_am10', side: 'attacker', hex: { col: 48, row: 10 } }, // vQ9
-  { templateId: 'am_536', id: 'unit_am11', side: 'attacker', hex: { col: 48, row: 10 } },
-  { templateId: 'am_L92', id: 'unit_amL92', side: 'attacker', hex: { col: 48, row: 5 } },
-  { templateId: 'am_L81', id: 'unit_amL81', side: 'attacker', hex: { col: 48, row: 11 } },
-  { templateId: 'am_MMG', id: 'amMMG_vQ4',  side: 'attacker', possessorId: 'unit_am1' },
-]
-
 function loadImage(src) {
   return new Promise((resolve, reject) => {
     const img = new Image();
@@ -356,8 +303,8 @@ const ffBigText = new Konva.Text({
 // ---------------------------------------------------------------------------
 // Создаём и загружаем все юниты сценария
 // ---------------------------------------------------------------------------
-export async function createAndLoadUnits(layer) {
-    for (const record of scenario) {
+export async function createAndLoadUnits(layer, scenarioUnits) {
+    for (const record of scenarioUnits) {
         const tmpl = TEMPLATES[record.templateId];
 
         // Для carried с possessorId hex берётся от possessor'а

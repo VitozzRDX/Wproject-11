@@ -1,4 +1,4 @@
-import { hexDistance, hexLabel, hexToPixel, pixelToHex, isSameHex } from './hexUtils.js';
+import { hexDistance, hexLabel, hexToPixel, pixelToHex, isSameHex, R } from './hexUtils.js';
 import { terrainAt } from './cards.js';
 import { bresenham, pixel_is_on_Obstacle_set, setLastHit } from './terrainLOS.js';
 
@@ -163,21 +163,61 @@ function _calcSmokeDRM(sHex, targetHex, hexPath) {
 }
 
 // Pixel-based hex line: пробегает пиксели Bresenham'ом от центра fromHex до
-// центра toHex, конвертирует каждый в hex через pixelToHex, дедуп подряд идущих.
-// Использовать для hindrance/smoke DRM — соответствует пиксельной геометрии LoS.
+// центра toHex, конвертирует каждый в hex через pixelToHex (Voronoi-nearest).
+// Затем: (1) отбрасывает "чирки" углов через фильтр perp_dist > R√3/2;
+//        (2) для hexspine случаев (linia строго по границе) выбирает
+//            hex с большим hindrance-вкладом (худший для стрелка).
+const R_SHORT   = R * Math.sqrt(3) / 2;   // ≈ 32.33 — короткий радиус hex'а (центр→ребро)
+const SPINE_TOL = 0.5;                    // px допуск для детекции hexspine
+
 function _hexLine(fromHex, toHex) {
     const from = hexToPixel(fromHex.col, fromHex.row);
     const to   = hexToPixel(toHex.col, toHex.row);
-    const out  = [];
+    // 1. Bresenham + Voronoi pixelToHex + дедуп подряд идущих
+    const raw  = [];
     let prevKey = null;
     for (const { x, y } of bresenham(from.x, from.y, to.x, to.y)) {
         const h   = pixelToHex(x, y);
         const key = `${h.col},${h.row}`;
         if (key === prevKey) continue;
-        out.push(h);
+        raw.push(h);
         prevKey = key;
     }
+    // 2. Фильтр чирков + resolution hexspine
+    const dx = to.x - from.x, dy = to.y - from.y;
+    const len = Math.sqrt(dx * dx + dy * dy) || 1;
+    const out = [];
+    for (const h of raw) {
+        if (isSameHex(h, fromHex) || isSameHex(h, toHex)) { out.push(h); continue; }
+        const c = hexToPixel(h.col, h.row);
+        const cross = (c.x - from.x) * dy - (c.y - from.y) * dx;
+        const perpDist = Math.abs(cross) / len;
+        if (perpDist > R_SHORT + SPINE_TOL) continue;                              // чирок угла — выкинуть
+        if (perpDist >= R_SHORT - SPINE_TOL) {
+            out.push(_worseHindrance(h, _mirrorHex(h, from, to)));                 // spine — худший из пары
+        } else {
+            out.push(h);                                                           // строго внутри hex
+        }
+    }
     return out;
+}
+
+// Отражает центр hex'а через линию from-to → возвращает hex по зеркальной точке.
+function _mirrorHex(h, from, to) {
+    const c = hexToPixel(h.col, h.row);
+    const dx = to.x - from.x, dy = to.y - from.y;
+    const t = ((c.x - from.x) * dx + (c.y - from.y) * dy) / (dx * dx + dy * dy);
+    const mirrorX = 2 * (from.x + t * dx) - c.x;
+    const mirrorY = 2 * (from.y + t * dy) - c.y;
+    return pixelToHex(mirrorX, mirrorY);
+}
+
+function _hindranceCount(h) {
+    return terrainAt(h.col, h.row).filter(t => HINDRANCE_TERRAINS.includes(t)).length;
+}
+
+function _worseHindrance(a, b) {
+    return _hindranceCount(b) > _hindranceCount(a) ? b : a;
 }
 
 // hex h есть в списке list?

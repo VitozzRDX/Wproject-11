@@ -106,9 +106,10 @@ const handlers = {
 
         const firegroupUnits = State.fireGroup.map(id => State.units[id]);
 
-        // 3.3.3: тот же стрелок не может стрелять по той же цели в том же гексе если MF<2
-        if (_illegal_targets(initialMovedTargets, firegroupUnits)) {
-            console.log('Rule 3.3.3: same shooter → same target in same hex with MF<2 — отклонено');
+        // Ограничения по правилам 3.3.3 / 3.2.2 — если нарушены, атака отклоняется.
+        const illegalReason = _illegal_targets(initialMovedTargets, firegroupUnits);
+        if (illegalReason) {
+            console.log(illegalReason);
             return;
         }
 
@@ -323,6 +324,7 @@ function _expend_mf(unitId, cost) {
 //           Т.е. новый юнит из того же гекса не может присоединиться после того,
 //           как из этого гекса уже стреляли по этой цели без него.
 // Возвращает true если хоть одно ограничение нарушено — атака запрещена целиком.
+// Возвращает строку с причиной отказа (для лога), либо null если ограничений нет.
 function _illegal_targets(targets, firegroupUnits) {
     for (const shooter of firegroupUnits) {
         const shooterLabel = hexLabel(shooter.hex.col, shooter.hex.row);
@@ -332,19 +334,23 @@ function _illegal_targets(targets, firegroupUnits) {
             const entry = record[t.id];
             if (!entry) continue;   // из этого гекса по этой цели ещё не стреляли — пропускаем
 
-            // 3.3.3: количество выстрелов уже равно MF цели → больше нельзя
-            if (entry.count >= t.mf_spent_in_current_hex) return true;
-
-            // 3.2.2: сепаратная атака — в текущей FG есть юнит из этого гекса,
-            // которого не было в оригинальной группе стрелявших
+            // 3.2.2 (проверяем первой — более специфичная причина): сепаратная атака.
+            // В текущей FG есть юнит из этого гекса, которого не было в оригинальной группе стрелявших.
             const shootersFromThisHex = firegroupUnits
                 .filter(f => hexLabel(f.hex.col, f.hex.row) === shooterLabel)
                 .map(f => f.id);
             const isSeparateAttack = shootersFromThisHex.some(id => !entry.firers.includes(id));
-            if (isSeparateAttack) return true;
+            if (isSeparateAttack) {
+                return `Rule 3.2.2: юниты в одном hex, стреляющие в одну цель, обязаны стрелять как единая FG (hex ${shooterLabel}, цель ${t.id})`;
+            }
+
+            // 3.3.3: количество выстрелов уже равно MF цели → больше нельзя
+            if (entry.count >= t.mf_spent_in_current_hex) {
+                return `Rule 3.3.3: из hex ${shooterLabel} по цели ${t.id} уже ${entry.count} выстрел(ов) = MF цели (${t.mf_spent_in_current_hex}), больше нельзя`;
+            }
         }
     }
-    return false;
+    return null;
 }
 
 // После успешного огня — обновить историю:

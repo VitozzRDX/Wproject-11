@@ -2,14 +2,16 @@ import * as interpreter from "/interpreter.js";
 import * as unitloading from "/unitloading.js";
 import { PhaseManager } from './phase_manager.js';
 import * as renderer from './renderer.js';
-import { initPositioning } from './positioning.js';
+import { initPositioning, recalculateHex } from './positioning.js';
 import { RendererUI } from './rendererUI.js';
 import { UIState } from './uiState.js';
 import { runFireSimulation } from './fireSimulation.js';
 import { runWoundSimulation } from './woundSimulation.js';
 import { initTerrainLOS } from './terrainLOS.js';
 import { hexToPixel, pixelToHex, COL_COUNT, ROW_COUNT, R, hexLabel } from './hexUtils.js';
-import { terrainAt } from './cards.js';
+import { terrainAt, setHexMap } from './cards.js';
+import { State } from './state.js';
+import { scenarios } from './scenarios.js';
 
 const stage = new Konva.Stage({
     container: 'container',
@@ -59,89 +61,133 @@ function draw_hex_grid(layer) {
     labelsGroup.cache();   // кешируем только лейблы
 }
 
-async function load_and_draw_background() {
-    // Создаём новый слой для фона
-    const backgroundLayer = new Konva.Layer();
-
-    // V-карта — обёрнута в Konva.Group для возможности поворота/переворота
-    const V_W = 1800, V_H = 645;
-    const cardV = new Konva.Group({
-        name: 'card-v',
-        x: V_W / 2, y: V_H / 2,           // позиция группы в мире
-        offsetX: V_W / 2, offsetY: V_H / 2, // локальный центр вращения
-        rotation: 180,
-    });
-    const img1base = await loadImage('./graf/base_layer.png');
-    cardV.add(new Konva.Image({ image: img1base, x: 0, y: 0, id: 'map1_base' }));
-    const img1terrain = await loadImage('./graf/terrain_inside_1.png');
-    cardV.add(new Konva.Image({ image: img1terrain, x: 0, y: 0, id: 'map1_terrain' }));
-
-    // Оверлеи контуров террейнов V-карты — внутри cardV, вращаются вместе
-    const overlaysV = [
-        './graf/woods_outline.png',
-        './graf/buildings_outline.png',
-        './graf/hills_outline_1.png',
-        './graf/orchard_outline_1.png',
-        './graf/brush_outline.png',
-    ];
-    const groupV = new Konva.Group({ name: 'overlays-v' });
-    for (const src of overlaysV) {
-        const overlayImg = await loadImage(src);
-        groupV.add(new Konva.Image({ image: overlayImg, x: 0, y: 0, listening: false }));
+// Draws card visuals per scenario config: каждая карта = Konva.Group с pivot
+// в центре карты + rotation (позволяет вращать ту же PNG для сценария B).
+async function drawCardVisuals(layer, cardVisuals) {
+    for (const card of cardVisuals) {
+        const group = new Konva.Group({
+            x: card.x + card.width / 2,          // позиция группы в мире = центр карты
+            y: card.y + card.height / 2,
+            offsetX: card.width / 2,             // локальный центр вращения
+            offsetY: card.height / 2,
+            rotation: card.rotation,
+        });
+        // base + terrain images
+        for (const src of card.images) {
+            const img = await loadImage(src);
+            group.add(new Konva.Image({ image: img, x: 0, y: 0 }));
+        }
+        // Оверлеи контуров террейнов — скрыты по умолчанию, вращаются с картой
+        const overlayGroup = new Konva.Group({ visible: false });
+        for (const src of card.overlayImages ?? []) {
+            const img = await loadImage(src);
+            overlayGroup.add(new Konva.Image({ image: img, x: 0, y: 0, listening: false }));
+        }
+        group.add(overlayGroup);
+        // Отдельный оверлей дорог — виден всегда, поворачивается с картой
+        if (card.roadImage) {
+            const img = await loadImage(card.roadImage);
+            group.add(new Konva.Image({ image: img, x: 0, y: 0, listening: false }));
+        }
+        layer.add(group);
     }
-    groupV.visible(false);
-    cardV.add(groupV);
+}
 
-    // Отдельный оверлей дорог поверх террейна — виден всегда, поворачивается с картой
-    const roadsImg = await loadImage('./graf/roads_outline.png');
-    cardV.add(new Konva.Image({ image: roadsImg, x: 0, y: 0, listening: false }));
+// Слои сцены (background + units) пересоздаются при loadScenario.
+// UI-слой (uiLayer) — persistent, живёт всю жизнь приложения.
+let backgroundLayer = null;
+let unitLayer = null;
 
-    backgroundLayer.add(cardV);
+// Загрузка сценария: полная перезагрузка карты, юнитов, параметров.
+// Вызывается при старте (init) и из консоли (window.Game.loadScenario('B')).
+async function loadScenario(name) {
+    const scen = scenarios[name];
+    if (!scen) { console.warn(`[loadScenario] '${name}' не найден`); return; }
+    console.log(`[loadScenario] ${name}`);
 
-    // Доска bdu слева от V
-    const bduBase = await loadImage('./graf/bdu_base_layer.png');
-    backgroundLayer.add(new Konva.Image({ image: bduBase, x: -1800, y: 0, id: 'bdu_base' }));
-    const bduTerrain = await loadImage('./graf/bdu_terrain_inside.png');
-    backgroundLayer.add(new Konva.Image({ image: bduTerrain, x: -1800, y: 0, id: 'bdu_terrain' }));
+    // 1. Wipe State — все игровые данные
+    State.units = {};
+    State.movementGroup = [];
+    State.movementStackHex = null;
+    State.fireGroup = [];
+    State.fireGroupHexesArray = [];
+    State.original_group = [];
+    State.splitted_group = [];
+    State.moved_movement_group = null;
+    State.pendingMove = null;
+    State.pendingSmoke = false;
+    State.fired_from_on_target_in_hex = {};
+    State.residualFP = {};
+    State.dynamicTerrain = {};
+    State.mfspent = false;
 
-    // Оверлеи контуров террейнов U-карты (x=-1800, y=0)
-    const overlaysU = [
-        './graf/bdu_woods_outline.png',
-        './graf/bdu_buildings_outline.png',
-        './graf/bdu_hills_outline.png',
-        './graf/bdu_orchard_outline.png',
-        './graf/bdu_brush_outline.png',
-    ];
-    const groupU = new Konva.Group({ name: 'overlays-u' });
-    for (const src of overlaysU) {
-        const overlayImg = await loadImage(src);
-        groupU.add(new Konva.Image({ image: overlayImg, x: -1800, y: 0, listening: false }));
-    }
-    groupU.visible(false);
-    backgroundLayer.add(groupU);
+    // 2. Wipe UI: кнопки + residualFP/LoS visuals
+    for (const b of Object.keys(UIState.buttons)) UIState.removeButton(b);
+    RendererUI.clearAll();
 
+    // 3. Destroy layers сцены
+    backgroundLayer?.destroy();
+    unitLayer?.destroy();
+    backgroundLayer = null;
+    unitLayer = null;
+
+    // 4. Параметры сценария
+    State.orchardInSeason = scen.orchardInSeason;
+    PhaseManager.setPhase('movement');
+    PhaseManager.setActiveRole(scen.activeRole);
+
+    // 5. Пиксельные наборы + hexmap
+    await initTerrainLOS(scen.pixelsUrl);
+    setHexMap(await scen.hexmapModule());
+
+    // 6. Background: карты (rotation/offset per card) + hex grid
+    backgroundLayer = new Konva.Layer();
+    await drawCardVisuals(backgroundLayer, scen.cardVisuals);
     draw_hex_grid(backgroundLayer);
-
     stage.add(backgroundLayer);
-    backgroundLayer.batchDraw();
-}
+    backgroundLayer.moveToBottom();
 
-async function load_and_draw_units() {
-    
-    const unitLayer = new Konva.Layer();   
-    await unitloading.createAndLoadUnits(unitLayer);
+    // 7. Юниты + первичное позиционирование (State.addUnit не триггерит subscribers,
+    // поэтому проходим по уникальным хексам и вручную вызываем recalculateHex)
+    unitLayer = new Konva.Layer();
+    await unitloading.createAndLoadUnits(unitLayer, scen.units);
     stage.add(unitLayer);
-    unitLayer.batchDraw();
+    const uniqueHexes = new Set();
+    Object.values(State.units).forEach(u => {
+        if (u.hex) uniqueHexes.add(`${u.hex.col},${u.hex.row}`);
+    });
+    uniqueHexes.forEach(k => {
+        const [col, row] = k.split(',').map(Number);
+        recalculateHex({ col, row });
+    });
 
+    // 8. Стандартные кнопки UI
+    UIState.addButton('NextPhase', { x: 10, y: 10, label: 'NextPhase' });
+
+    // 9. Камера
+    stage.x(scen.initialCamera?.x ?? 0);
+    stage.y(scen.initialCamera?.y ?? 0);
+
+    stage.batchDraw();
 }
+
+// Экспозиция в глобал для консольного управления сценарием.
+window.Game = { loadScenario };
 
 async function init() {
 
-    await initTerrainLOS();
-    await load_and_draw_background();
-    await load_and_draw_units();
-    PhaseManager.setPhase('movement');
-    PhaseManager.setActiveRole('attacker');
+    // One-time subscribers: Renderer/Positioning живут всё время приложения,
+    // handlers сами реагируют на setUnit для новых юнитов при loadScenario.
+    // Сначала Renderer подписывается на State
+    renderer.initRenderer();
+    // Потом Positioning — он сразу пройдёт по гексам и расставит юниты,
+    // Renderer уже услышит pos-события и анимирует
+    initPositioning();
+
+    // UI слой для кнопок (persistent)
+    const uiLayer = new Konva.Layer();
+    stage.add(uiLayer);
+    RendererUI.init(uiLayer);
 
     // --- DEBUG tagging mode ---
     // F — toggle; в режиме клики собирают hex-лейблы в Set (повторный клик = убрать)
@@ -167,30 +213,6 @@ async function init() {
             return;
         }
         interpreter.interpretEvent(e);
-    });
-
-    window.addEventListener('keydown', (e) => {
-        if (e.key === 'F' || e.key === 'f') {
-            _tagMode = !_tagMode;
-            console.log(`[MODE] tagging ${_tagMode ? 'ON' : 'OFF'}`);
-            return;
-        }
-        if (e.key === 'P' || e.key === 'p') {
-            const arr = Array.from(_tagged).sort();
-            console.log(`=== tagged (${arr.length}): ===\n${arr.join(', ')}`);
-            _tagged.clear();
-            return;
-        }
-        if (e.key === 'C' || e.key === 'c') {
-            _tagged.clear();
-            console.log('[tag] cleared');
-            return;
-        }
-        if (e.key === 'D' || e.key === 'd') {
-            _toggleTerrainOverlay();
-            return;
-        }
-        interpreter.interpretKeyEvent(e);
     });
 
     // Debug overlay для visual verification hexmap
@@ -252,6 +274,30 @@ async function init() {
         console.log('[overlay] ON');
     }
 
+    window.addEventListener('keydown', (e) => {
+        if (e.key === 'F' || e.key === 'f') {
+            _tagMode = !_tagMode;
+            console.log(`[MODE] tagging ${_tagMode ? 'ON' : 'OFF'}`);
+            return;
+        }
+        if (e.key === 'P' || e.key === 'p') {
+            const arr = Array.from(_tagged).sort();
+            console.log(`=== tagged (${arr.length}): ===\n${arr.join(', ')}`);
+            _tagged.clear();
+            return;
+        }
+        if (e.key === 'C' || e.key === 'c') {
+            _tagged.clear();
+            console.log('[tag] cleared');
+            return;
+        }
+        if (e.key === 'D' || e.key === 'd') {
+            _toggleTerrainOverlay();
+            return;
+        }
+        interpreter.interpretKeyEvent(e);
+    });
+
     // Скроллинг WASD через RAF — плавный без auto-repeat задержки
     const pressedKeys = new Set();
     window.addEventListener('keydown', (e) => {
@@ -273,17 +319,8 @@ async function init() {
         requestAnimationFrame(scrollLoop);
     })();
 
-    // Сначала Renderer подписывается на State
-    renderer.initRenderer();
-    // Потом Positioning — он сразу пройдёт по гексам и расставит юниты,
-    // Renderer уже услышит pos-события и анимирует
-    initPositioning();
-
-    // UI слой для кнопок
-    const uiLayer = new Konva.Layer();
-    stage.add(uiLayer);
-    UIState.addButton('NextPhase', { x: 10, y: 10, label: 'NextPhase' });
-    RendererUI.init(uiLayer);
+    // Стартовый сценарий
+    await loadScenario('A');
 
     runFireSimulation();
     runWoundSimulation();

@@ -6,6 +6,16 @@ const losLines = [];
 const residualNodes = new Map();   // hexKey → Konva.Group для residual FP счётчиков
 
 export const RendererUI = {
+    // Очищает residualFP-счётчики и LoS-линии (Konva-ноды).
+    // Кнопки не трогаем — ими управляет UIState через add/remove.
+    clearAll() {
+        for (const [, node] of residualNodes) node.destroy();
+        residualNodes.clear();
+        losLines.forEach(l => l.destroy());
+        losLines.length = 0;
+        uiLayer?.batchDraw();
+    },
+
     init(layer) {
         uiLayer = layer;
 
