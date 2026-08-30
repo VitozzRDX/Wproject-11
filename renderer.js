@@ -132,6 +132,11 @@ export function initRenderer() {
             flipRendering(node, State.units[id]);
         }
 
+        // Prep Fire marker — юнит отстрелялся в PFPh, движение в MPh заблокировано
+        if (key === 'prepFired') {
+            node.findOne('.pfText').visible(value);
+        }
+
         // Полоска "active" — юнит начал двигаться (но не закончил)
         if (key === 'hasStartedMoving') {
             const completed = State.units[id].movementCompleted;

@@ -1,27 +1,36 @@
 import { UIState } from './uiState.js';
 import { hexToPixel } from './hexUtils.js';
 
+// Два слоя: uiLayer — screen-fixed (кнопки, крутилка); worldFxLayer — world-anchored (LoS, residual, smoke).
 let uiLayer;
+let worldFxLayer;
 const losLines = [];
 const residualNodes = new Map();   // hexKey → Konva.Group для residual FP счётчиков
 
 export const RendererUI = {
-    // Очищает residualFP-счётчики и LoS-линии (Konva-ноды).
+    // Очищает residualFP-счётчики и LoS-линии на worldFxLayer + все .img-* на uiLayer.
     // Кнопки не трогаем — ими управляет UIState через add/remove.
     clearAll() {
         for (const [, node] of residualNodes) node.destroy();
         residualNodes.clear();
         losLines.forEach(l => l.destroy());
         losLines.length = 0;
+        worldFxLayer?.batchDraw();
+        // Удалить все .img-* (крутилка и другие персистентные UI-картинки)
+        uiLayer?.getChildren(n => n.name()?.startsWith('img-')).forEach(n => n.destroy());
         uiLayer?.batchDraw();
     },
 
-    init(layer) {
-        uiLayer = layer;
+    init(ui, worldFx) {
+        uiLayer      = ui;
+        worldFxLayer = worldFx;
 
         UIState.subscribe((action, label, data) => {
             if (action === 'add')            RendererUI.drawButton(data);
             if (action === 'remove')         RendererUI.removeButton(label);
+            if (action === 'addImage')       RendererUI.drawImage(label, data);
+            if (action === 'removeImage')    RendererUI.removeImage(label);
+            if (action === 'rotateImage')    RendererUI.rotateImage(label, data.delta);
             if (action === 'flashLOS')       RendererUI.drawLOSLine(data.from, data.to, data.color);
             if (action === 'flashHitPoints') RendererUI.drawHitPoints(data);
             if (action === 'setResidualFP')  RendererUI.drawResidualCounter(data.hex, data.fp);
@@ -39,9 +48,9 @@ export const RendererUI = {
             strokeWidth: 1,
             listening: false,
         });
-        uiLayer.add(line);
+        worldFxLayer.add(line);
         losLines.push(line);
-        uiLayer.batchDraw();
+        worldFxLayer.batchDraw();
     },
 
     // Простая анимация дыма — 4 полупрозрачных серых кружка, поднимаются и растворяются
@@ -62,7 +71,7 @@ export const RendererUI = {
             group.add(puff);
             puffs.push(puff);
         }
-        uiLayer.add(group);
+        worldFxLayer.add(group);
 
         // Каждый кружок проходит цикл ~2.5 сек: растёт, поднимается, покачивается, растворяется.
         // Фазы со сдвигом (i / N) — всегда несколько puff'ов на разных стадиях.
@@ -82,7 +91,7 @@ export const RendererUI = {
                 puff.y(yOff);
                 puff.opacity(alpha);
             });
-        }, uiLayer);
+        }, worldFxLayer);
         anim.start();
         return { group, anim };
     },
@@ -93,7 +102,7 @@ export const RendererUI = {
         const old = residualNodes.get(key);
         if (old) { old.destroy(); residualNodes.delete(key); }
 
-        if (fp <= 0) { uiLayer.batchDraw(); return; }
+        if (fp <= 0) { worldFxLayer.batchDraw(); return; }
 
         const { x, y } = hexToPixel(hex.col, hex.row);
         const group = new Konva.Group({ x, y, listening: false });
@@ -139,9 +148,9 @@ export const RendererUI = {
                 verticalAlign: 'middle',
             }));
         });
-        uiLayer.add(group);
+        worldFxLayer.add(group);
         residualNodes.set(key, group);
-        uiLayer.batchDraw();
+        worldFxLayer.batchDraw();
     },
 
     drawHitPoints(points) {
@@ -152,9 +161,9 @@ export const RendererUI = {
                 fill: 'lime',
                 listening: false,
             });
-            uiLayer.add(circle);
+            worldFxLayer.add(circle);
         });
-        uiLayer.batchDraw();
+        worldFxLayer.batchDraw();
     },
 
     drawButton({ x, y, label }) {
@@ -172,5 +181,39 @@ export const RendererUI = {
     removeButton(label) {
         const btn = uiLayer.findOne(`.btn-${label}`);
         if (btn) { btn.destroy(); uiLayer.batchDraw(); }
+    },
+
+    async drawImage(name, { src, x, y, opacity = 1, listening = false, scale = 1 }) {
+        RendererUI.removeImage(name);
+        const img = await new Promise((res, rej) => {
+            const i = new Image();
+            i.onload = () => res(i);
+            i.onerror = rej;
+            i.src = src;
+        });
+        // pivot в центре — чтобы rotation крутил вокруг центра, а не угла
+        const node = new Konva.Image({
+            image: img,
+            x: x + img.width / 2,
+            y: y + img.height / 2,
+            offsetX: img.width / 2,
+            offsetY: img.height / 2,
+            scaleX: scale, scaleY: scale,
+            opacity, listening,
+            name: `img-${name}`,
+        });
+        uiLayer.add(node);
+        uiLayer.batchDraw();
+    },
+
+    removeImage(name) {
+        const node = uiLayer.findOne(`.img-${name}`);
+        if (node) { node.destroy(); uiLayer.batchDraw(); }
+    },
+
+    rotateImage(name, delta) {
+        const node = uiLayer.findOne(`.img-${name}`);
+        if (!node) return;
+        node.to({ rotation: node.rotation() + delta, duration: 0.4 });
     },
 };

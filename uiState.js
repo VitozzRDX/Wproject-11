@@ -13,6 +13,22 @@ export const UIState = {
         this.subscribers.forEach(sub => sub('remove', label));
     },
 
+    addImage(name, def) {
+        this.images ??= {};
+        this.images[name] = def;
+        this.subscribers.forEach(sub => sub('addImage', name, def));
+    },
+
+    removeImage(name) {
+        if (!this.images?.[name]) return;
+        delete this.images[name];
+        this.subscribers.forEach(sub => sub('removeImage', name));
+    },
+
+    rotateImage(name, delta) {
+        this.subscribers.forEach(sub => sub('rotateImage', name, { delta }));
+    },
+
     subscribe(handler) {
         this.subscribers.push(handler);
     },

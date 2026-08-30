@@ -97,6 +97,8 @@ async function drawCardVisuals(layer, cardVisuals) {
 // UI-слой (uiLayer) — persistent, живёт всю жизнь приложения.
 let backgroundLayer = null;
 let unitLayer = null;
+let uiLayer = null;         // screen-fixed: кнопки + крутилка
+let worldFxLayer = null;    // world-anchored: LoS, residual, smoke, hit points
 
 // Загрузка сценария: полная перезагрузка карты, юнитов, параметров.
 // Вызывается при старте (init) и из консоли (window.Game.loadScenario('B')).
@@ -133,11 +135,10 @@ async function loadScenario(name) {
 
     // 4. Параметры сценария
     State.orchardInSeason = scen.orchardInSeason;
-    PhaseManager.setPhase('movement');
-    PhaseManager.setActiveRole(scen.activeRole);
+    PhaseManager.setPhase('rally');
 
     // 5. Пиксельные наборы + hexmap
-    await initTerrainLOS(scen.pixelsUrl);
+    await initTerrainLOS(scen.pixelsUrl, scen.roadsUrl);
     setHexMap(await scen.hexmapModule());
 
     // 6. Background: карты (rotation/offset per card) + hex grid
@@ -152,6 +153,8 @@ async function loadScenario(name) {
     unitLayer = new Konva.Layer();
     await unitloading.createAndLoadUnits(unitLayer, scen.units);
     stage.add(unitLayer);
+    worldFxLayer.moveToTop();   // эффекты (LoS, residual, smoke) над юнитами
+    uiLayer.moveToTop();        // UI (кнопки, крутилка) поверх всего
     const uniqueHexes = new Set();
     Object.values(State.units).forEach(u => {
         if (u.hex) uniqueHexes.add(`${u.hex.col},${u.hex.row}`);
@@ -161,12 +164,20 @@ async function loadScenario(name) {
         recalculateHex({ col, row });
     });
 
-    // 8. Стандартные кнопки UI
+    // 8. Стандартные UI: кнопки + крутилка
     UIState.addButton('NextPhase', { x: 10, y: 10, label: 'NextPhase' });
+    UIState.addImage('turnphase', {
+        src: './graf/turnphase.gif',
+        x: window.innerWidth - 200, y: 20,
+        opacity: 0.5,
+        scale: 0.8,
+    });
 
-    // 9. Камера
+    // 9. Камера + компенсация uiLayer (UI остаётся на месте при скролле)
     stage.x(scen.initialCamera?.x ?? 0);
     stage.y(scen.initialCamera?.y ?? 0);
+    uiLayer.x(-stage.x());
+    uiLayer.y(-stage.y());
 
     stage.batchDraw();
 }
@@ -184,10 +195,12 @@ async function init() {
     // Renderer уже услышит pos-события и анимирует
     initPositioning();
 
-    // UI слой для кнопок (persistent)
-    const uiLayer = new Konva.Layer();
+    // UI слои (persistent): worldFx для эффектов на карте (LoS/residual/smoke), ui для кнопок/крутилки.
+    worldFxLayer = new Konva.Layer();
+    uiLayer      = new Konva.Layer();
+    stage.add(worldFxLayer);
     stage.add(uiLayer);
-    RendererUI.init(uiLayer);
+    RendererUI.init(uiLayer, worldFxLayer);
 
     // --- DEBUG tagging mode ---
     // F — toggle; в режиме клики собирают hex-лейблы в Set (повторный клик = убрать)
@@ -201,7 +214,7 @@ async function init() {
         const pos = { x: raw.x - st.x(), y: raw.y - st.y() };
         const h   = pixelToHex(pos.x, pos.y);
         const label = hexLabel(h.col, h.row);
-        console.log(`[click] world(${pos.x.toFixed(1)}, ${pos.y.toFixed(1)}) hex ${label}`);
+        // console.log(`[click] world(${pos.x.toFixed(1)}, ${pos.y.toFixed(1)}) hex ${label}`);
         if (_tagMode) {
             if (_tagged.has(label)) {
                 _tagged.delete(label);
@@ -314,6 +327,8 @@ async function init() {
         if (dx || dy) {
             stage.x(stage.x() + dx);
             stage.y(stage.y() + dy);
+            uiLayer.x(-stage.x());   // синхронизация: UI на месте на экране
+            uiLayer.y(-stage.y());
             stage.batchDraw();
         }
         requestAnimationFrame(scrollLoop);
@@ -322,7 +337,7 @@ async function init() {
     // Стартовый сценарий
     await loadScenario('A');
 
-    runFireSimulation();
-    runWoundSimulation();
+    // runFireSimulation();
+    // runWoundSimulation();
 }
 init();

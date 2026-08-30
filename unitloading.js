@@ -16,7 +16,8 @@ const Infantry         = { ...Unit, category: 'infantry',
                                     doubleTime: false, assaultMovement: false,
                                     desperationMorale: false,
                                     mf_spent_in_current_hex: 0,
-                                    smokeAttempted: false };   // сбрасывается в начале MPh (TODO при phase transitions)
+                                    smokeAttempted: false,   // сбрасывается в начале MPh (TODO при phase transitions)
+                                    prepFired: false };      // отстрелялся в PFPh → блок мува в MPh
 const Squad            = { ...Infantry, type: 'squad', mf: 4, leaderBonus: 2, firingStatus: ' ', ipc: 3 };   // MMC
 const Leader           = { ...Infantry, type: 'leader', mf: 6, quality: 'Elite', ipc: 1 };                    // SMC
 const GermanSquad_1st   = { ...Squad,  nation: 'german',   quality: '1stLine', selfRally: true  };
@@ -273,7 +274,17 @@ const ffBigText = new Konva.Text({
     listening: false,
 });
 
-    group.add(image, movedRect, movedText, activeRect, activeText, selectRect, addToMovementGroupRect, addToFireGroupRect, cxText, pinBg, pinText, dmText, woundedRect, woundedCross, woundedText, ffRect, ffText, ffBigText);
+const pfText = new Konva.Text({
+    x: 0, y: 0,
+    width: w, height: h,
+    text: 'PF', fill: 'orange', fontSize: Math.floor(w * 0.5), fontStyle: 'bold',
+    align: 'center', verticalAlign: 'middle',
+    visible: false,
+    name: 'pfText',
+    listening: false,
+});
+
+    group.add(image, movedRect, movedText, activeRect, activeText, selectRect, addToMovementGroupRect, addToFireGroupRect, cxText, pinBg, pinText, dmText, woundedRect, woundedCross, woundedText, ffRect, ffText, ffBigText, pfText);
     
     const unit = { ...data, node: group };
 

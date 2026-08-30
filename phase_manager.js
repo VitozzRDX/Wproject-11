@@ -1,11 +1,28 @@
-let phase = 'movement';
-let activeRole = 'attacker';   // кто сейчас на ходу (ATTACKER, свапается player-turn'ами)
+// Список фаз в порядке очерёдности (8 фаз per player turn).
+const PHASES = [
+    'rally',
+    'prepFire',
+    'movement',
+    'defensiveFire',
+    'advancingFire',
+    'rout',
+    'advance',
+    'closeCombat',
+];
+
+let phase = 'rally';
+let phaseIdx = 0;
 
 export const PhaseManager = {
-  setPhase(p) { phase = p; },
-  getPhase()  { return phase; },
-
-  setActiveRole(r) { activeRole = r; },
-  getActiveRole()  { return activeRole; },
-  getDefendingRole() { return activeRole === 'attacker' ? 'defender' : 'attacker'; }
+    getPhase()  { return phase; },
+    setPhase(p) {
+        phase = p;
+        const idx = PHASES.indexOf(p);
+        if (idx >= 0) phaseIdx = idx;
+    },
+    next() {
+        phaseIdx = (phaseIdx + 1) % PHASES.length;
+        phase = PHASES[phaseIdx];
+        return phase;
+    },
 };

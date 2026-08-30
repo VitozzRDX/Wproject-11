@@ -15,10 +15,10 @@ let _lastHit = null;
 export function getLastHit() { return _lastHit; }
 export function setLastHit(v) { _lastHit = v; }
 
-export async function initTerrainLOS(pixelsUrl = './terrainPixels.json') {
+export async function initTerrainLOS(pixelsUrl = './terrainPixels.json', roadsUrl = './roadPixels.json') {
     const [data, roadData] = await Promise.all([
         fetch(pixelsUrl).then(r => r.json()),
-        fetch('./roadPixels.json').then(r => r.json()).catch(() => ({})),
+        fetch(roadsUrl).then(r => r.json()).catch(() => ({})),
     ]);
     // Чистим предыдущие данные — при перезагрузке сценария carry-over не нужен.
     for (const k of Object.keys(cards)) delete cards[k];

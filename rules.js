@@ -683,8 +683,12 @@ function _lltc(leader, targets, result) {
         if (s === 'eliminated' || s === 'broken' || s === 'pinned') return false;
         return effMorale(u) < effMorale(leader);
     });
-    console.log(`[LLTC] leader ${leader.id} broken → PTC penalty=${penalty}, affected: ${affected.map(u=>u.id).join(',')}`);
-    _processPTC(affected, penalty, result);
+    if (affected.length === 0) {
+        console.log(`[LLTC] leader ${leader.id} broken → нет affected: у всех подчинённых мораль ≥ лидерской (${effMorale(leader)})`);
+    } else {
+        console.log(`[LLTC] leader ${leader.id} broken → PTC penalty=${penalty}, affected: ${affected.map(u=>u.id).join(',')}`);
+        _processPTC(affected, penalty, result);
+    }
 }
 
 // Leader Loss Morale Check — то же самое, только NMC вместо PTC.
@@ -696,8 +700,12 @@ function _llmc(leader, targets, result) {
         if (s === 'eliminated' || s === 'broken' || s === 'pinned') return false;
         return effMorale(u) < effMorale(leader);
     });
-    console.log(`[LLMC] leader ${leader.id} eliminated → NMC penalty=${penalty}, affected: ${affected.map(u=>u.id).join(',')}`);
-    _processMC(affected, penalty, result);
+    if (affected.length === 0) {
+        console.log(`[LLMC] leader ${leader.id} eliminated → нет affected: у всех подчинённых мораль ≥ лидерской (${effMorale(leader)})`);
+    } else {
+        console.log(`[LLMC] leader ${leader.id} eliminated → NMC penalty=${penalty}, affected: ${affected.map(u=>u.id).join(',')}`);
+        _processMC(affected, penalty, result);
+    }
 }
 
 // PTC для группы целей: лидеры первыми (лучший по морали),
@@ -1178,13 +1186,14 @@ function calc_road_bonus_per_unit(mg, units, result, targetHex, overrideTerrain 
 }
 
 export const Rules = {
-    checkIfAddingToMovementGroupIsValid(unit, movementStackHex, activeSide, mg, units) {
+    checkIfAddingToMovementGroupIsValid(unit, movementStackHex, movingSide, mg, units) {
         if (unit.pinned || unit.broken) return false;
+        if (unit.prepFired) return false;   // стрелял в PFPh → не двигается в MPh
 
         const isInSameHex = unit.hex.col === movementStackHex.col &&
                             unit.hex.row === movementStackHex.row;
-        const isActiveSide = unit.side === activeSide;
-        if (!(isInSameHex && isActiveSide)) return false;
+        const isMovingSide = unit.side === movingSide;
+        if (!(isInSameHex && isMovingSide)) return false;
 
         // не смешиваем двинувшихся с не-двинувшимися
         if (mg && mg.length > 0) {
@@ -1194,7 +1203,7 @@ export const Rules = {
         return true;
     },
 
-    checkIfAddingToFireGroupIsValid(unit, defSide, fg, units) {
+    checkIfAddingToFireGroupIsValid(unit, firingSide, fg, units) {
         // сломанный юнит (пехота или weapon) — не стреляет
         if (unit.broken) return false;
 
@@ -1205,10 +1214,10 @@ export const Rules = {
             // хозяин не в форме — оружие не стреляет
             if (possessor.broken || possessor.pinned) return false;
             // Национальность weapon = национальность possessor'а (можно владеть трофейным)
-            if (possessor.side !== defSide) return false;
+            if (possessor.side !== firingSide) return false;
         } else {
             // Своя национальность у пехоты
-            if (unit.side !== defSide) return false;
+            if (unit.side !== firingSide) return false;
         }
 
         // Общие правила смежности (те же для пехоты и weapon)
@@ -1325,25 +1334,53 @@ export const Rules = {
     hexInList: _hexInList,
 
     arrangeMovement(ctx) {
-        if (ctx.movementGroup.length === 0) return null;
+        if (ctx.movementGroup.length === 0) {
+            console.log('[move] MG пусто');
+            return null;
+        }
 
         const fromHex = ctx.units[ctx.movementGroup[0]].hex;
-        if (!isAdjacent(fromHex, ctx.targetHex)) return null;
-        if (!checkOverstack(ctx.targetHex, ctx.movementGroup, ctx.units)) return null;
+        if (!isAdjacent(fromHex, ctx.targetHex)) {
+            console.log(`[move] target (${ctx.targetHex.col},${ctx.targetHex.row}) не соседний с (${fromHex.col},${fromHex.row})`);
+            return null;
+        }
+        if (!checkOverstack(ctx.targetHex, ctx.movementGroup, ctx.units)) {
+            console.log(`[move] overstack в target hex (макс 3 squads / 4 leaders)`);
+            return null;
+        }
 
         const overrideTerrain = ctx.overrideTerrain || null;
 
-        // AM-ограничения: только 1 шаг, и нельзя съесть весь MF
+        // Assault Move-ограничения: только 1 шаг, и нельзя съесть весь MF
         for (const id of ctx.movementGroup) {
             const u = ctx.units[id];
             if (!u.assaultMovement) continue;
-            if (u.hasStartedMoving) return null;
-            if (u.mf - checkCost(ctx.targetHex, u.hex, overrideTerrain) - _portageExcess(u, ctx.units, ctx.movementGroup) <= 0) return null;
+            if (u.hasStartedMoving) {
+                console.log(`[move] Assault Move: ${id} уже начал движение — нельзя`);
+                return null;
+            }
+            if (u.mf - checkCost(ctx.targetHex, u.hex, overrideTerrain) - _portageExcess(u, ctx.units, ctx.movementGroup) <= 0) {
+                console.log(`[move] Assault Move: ${id} истратил бы весь MF (запрещено правилом Assault Move)`);
+                return null;
+            }
         }
 
         let result = {};
         result = calc_mf_per_unit(ctx.movementGroup, ctx.units, ctx.targetHex, result, overrideTerrain);
-        if (result === null) return null;
+        if (result === null) {
+            // Детальный лог: кто именно не может и почему
+            for (const id of ctx.movementGroup) {
+                const u = ctx.units[id];
+                const cost   = checkCost(ctx.targetHex, u.hex, overrideTerrain);
+                const excess = _portageExcess(u, ctx.units, ctx.movementGroup);
+                const eff    = u.mf - excess - cost;
+                const m      = calc_mf(u, ctx.targetHex, ctx.movementGroup, ctx.units, overrideTerrain);
+                if (m === null) {
+                    console.log(`[move] ${id}: mf=${u.mf} excess=${excess} cost=${cost} → effective=${eff}, бонусы не покрывают (leaderBonus=${u.leaderBonus}, roadBonus=${u.roadBonus})`);
+                }
+            }
+            return null;
+        }
 
         result = calc_leader_bonus_per_unit(ctx.movementGroup, ctx.units, result, ctx.targetHex, overrideTerrain);
         result = calc_road_bonus_per_unit (ctx.movementGroup, ctx.units, result, ctx.targetHex, overrideTerrain);

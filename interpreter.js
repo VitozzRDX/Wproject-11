@@ -96,39 +96,60 @@ const RULES = [
     {
         requiresAny: [
             {
+                phaseIsMovement:       ()  => PhaseManager.getPhase() === 'movement',
                 noShift:               ctx => !ctx.shiftKey,
-                leftClick:       ctx => ctx.button !== 2,
-                hasUnit:   ctx => ctx.unitId !== undefined,
-                clickedSideIsAttacker: ctx => State.units[ctx.unitId].side === PhaseManager.getActiveRole(),
-                movingGroupIsEmpty: () => State.movementGroup.length === 0,
-                fireGroupIsEmpty:   () => State.fireGroup.length === 0,
+                leftClick:             ctx => ctx.button !== 2,
+                hasUnit:               ctx => ctx.unitId !== undefined,
+                clickedSideIsAttacker: ctx => State.units[ctx.unitId].side === 'attacker',
+                movingGroupIsEmpty:    ()  => State.movementGroup.length === 0,
+                fireGroupIsEmpty:      ()  => State.fireGroup.length === 0,
             },
             {
-                shift :       ctx => ctx.shiftKey,
-                leftClick:       ctx => ctx.button !== 2,
-                hasUnit:   ctx => ctx.unitId !== undefined,
-                clickedSideIsAttacker: ctx => State.units[ctx.unitId].side === PhaseManager.getActiveRole(),
-                movingGroupIsNotEmpty: () => State.movementGroup.length > 0,
-                fireGroupIsEmpty:      () => State.fireGroup.length === 0,
+                phaseIsMovement:       ()  => PhaseManager.getPhase() === 'movement',
+                shift:                 ctx => ctx.shiftKey,
+                leftClick:             ctx => ctx.button !== 2,
+                hasUnit:               ctx => ctx.unitId !== undefined,
+                clickedSideIsAttacker: ctx => State.units[ctx.unitId].side === 'attacker',
+                movingGroupIsNotEmpty: ()  => State.movementGroup.length > 0,
+                fireGroupIsEmpty:      ()  => State.fireGroup.length === 0,
             }
         ],
-        name:'addToMovingGroup'
+        name: 'addToMovingGroup'
     },
     {
         requiresAny: [
+            // MPh: defender добавляется в FG для DFF
             {
-                leftClick:       ctx => ctx.button !== 2,
-                hasUnit:   ctx => ctx.unitId !== undefined,
-                clickedSideIsDefender: ctx => State.units[ctx.unitId].side === PhaseManager.getDefendingRole(),
-                fireGroupIsEmpty: () => State.fireGroup.length === 0,
-                mfspent: () => State.mfspent,
+                phaseIsMovement:       ()  => PhaseManager.getPhase() === 'movement',
+                leftClick:             ctx => ctx.button !== 2,
+                hasUnit:               ctx => ctx.unitId !== undefined,
+                clickedSideIsDefender: ctx => State.units[ctx.unitId].side === 'defender',
+                fireGroupIsEmpty:      ()  => State.fireGroup.length === 0,
+                mfspent:               ()  => State.mfspent,
             },
             {
-                shift :       ctx => ctx.shiftKey,
-                leftClick:       ctx => ctx.button !== 2,
-                hasUnit:   ctx => ctx.unitId !== undefined,
-                clickedSideIsDefender: ctx => State.units[ctx.unitId].side === PhaseManager.getDefendingRole(),
-                fireGroupIsNotEmpty: () => State.fireGroup.length > 0,
+                phaseIsMovement:       ()  => PhaseManager.getPhase() === 'movement',
+                shift:                 ctx => ctx.shiftKey,
+                leftClick:             ctx => ctx.button !== 2,
+                hasUnit:               ctx => ctx.unitId !== undefined,
+                clickedSideIsDefender: ctx => State.units[ctx.unitId].side === 'defender',
+                fireGroupIsNotEmpty:   ()  => State.fireGroup.length > 0,
+            },
+            // PFPh: attacker добавляется в FG для prep fire
+            {
+                phaseIsPrepFire:       ()  => PhaseManager.getPhase() === 'prepFire',
+                leftClick:             ctx => ctx.button !== 2,
+                hasUnit:               ctx => ctx.unitId !== undefined,
+                clickedSideIsAttacker: ctx => State.units[ctx.unitId].side === 'attacker',
+                fireGroupIsEmpty:      ()  => State.fireGroup.length === 0,
+            },
+            {
+                phaseIsPrepFire:       ()  => PhaseManager.getPhase() === 'prepFire',
+                shift:                 ctx => ctx.shiftKey,
+                leftClick:             ctx => ctx.button !== 2,
+                hasUnit:               ctx => ctx.unitId !== undefined,
+                clickedSideIsAttacker: ctx => State.units[ctx.unitId].side === 'attacker',
+                fireGroupIsNotEmpty:   ()  => State.fireGroup.length > 0,
             }
         ],
         name: 'addToFireGroup'
@@ -154,15 +175,26 @@ const RULES = [
         name: 'MOVE'
     },
     {   requiresAny: [
+            // MPh: target = attacker (DFF)
             {
+                phaseIsMovement:       ()  => PhaseManager.getPhase() === 'movement',
                 noShift:               ctx => !ctx.shiftKey,
-                leftClick:      ctx => ctx.button !== 2,
-                fireGroupIsNotEmpty: () => State.fireGroup.length > 0,
-                hasUnit:   ctx => ctx.unitId !== undefined,
-                clickedSideIsAttacker: ctx => State.units[ctx.unitId].side === PhaseManager.getActiveRole()
+                leftClick:             ctx => ctx.button !== 2,
+                fireGroupIsNotEmpty:   ()  => State.fireGroup.length > 0,
+                hasUnit:               ctx => ctx.unitId !== undefined,
+                clickedSideIsAttacker: ctx => State.units[ctx.unitId].side === 'attacker',
+            },
+            // PFPh: target = defender (prep fire)
+            {
+                phaseIsPrepFire:       ()  => PhaseManager.getPhase() === 'prepFire',
+                noShift:               ctx => !ctx.shiftKey,
+                leftClick:             ctx => ctx.button !== 2,
+                fireGroupIsNotEmpty:   ()  => State.fireGroup.length > 0,
+                hasUnit:               ctx => ctx.unitId !== undefined,
+                clickedSideIsDefender: ctx => State.units[ctx.unitId].side === 'defender',
             }
         ],
-        name: 'DefensiveFirstFire'
+        name: 'Fire'
     },
 
 ]
