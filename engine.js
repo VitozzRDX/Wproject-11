@@ -99,16 +99,23 @@ const handlers = {
         }
     },
     
-    Fire: async (ctx) => {
-        const phase = PhaseManager.getPhase();
-        if (phase === 'movement')  return _handleFire(ctx, 'dff');
-        if (phase === 'prepFire')  return _handleFire(ctx, 'prep');
-    },
+    Fire: async (ctx) => _handleFire(ctx),
 
     NextPhase: () => {
+        const prevPhase = PhaseManager.getPhase();
         const p = PhaseManager.next();
         UIState.rotateImage('turnphase', -45);   // 1/8 оборота против часовой (одна грань)
         console.log(`[phase] → ${p}`);
+
+        // Правило DFPh: убрать все First/Final Fire counters в конце фазы.
+        if (prevPhase === 'defensiveFire') {
+            for (const u of Object.values(State.units)) {
+                if (u.firingStatus !== undefined && u.firingStatus !== ' ') {
+                    State.setUnit(u.id, 'firingStatus', ' ');
+                }
+            }
+            console.log('[DFPh end] cleared First/Final Fire counters');
+        }
     },
     DoubleTime: () => {
         if (!Rules.checkIfDoubleTimeForMovementGroupIsValid(State.movementGroup, State.units)) return;
@@ -218,29 +225,53 @@ const handlers = {
     },
 }
 
-// Общий пайплайн огня: DFF в MPh и prep fire в PFPh отличаются target'ами и пост-обработкой.
-// mode: 'dff' | 'prep'
-async function _handleFire(ctx, mode) {
+// Общий пайплайн огня для всех фаз (MPh DFF, PFPh prep, DFPh Final Fire).
+// Ветвление внутри — по PhaseManager.getPhase().
+async function _handleFire(ctx) {
     const targetHex = pixelToHex(ctx.pos.x, ctx.pos.y);
+    const phase = PhaseManager.getPhase();
 
-    // Target getter: DFF → двинувшиеся atacker'ы; Prep → все defender-infantry в hex'e.
-    const getTargets = mode === 'dff'
-        ? () => _movedTargetsInHex(targetHex)
-        : () => _defenderInfantryInHex(targetHex);
+    // Target getter per phase:
+    //   movement       — только двинувшиеся atacker'ы (DFF);
+    //   prepFire       — все defender-infantry в hex'e (prep fire);
+    //   defensiveFire  — все attacker-infantry в hex'e (Final Fire).
+    let getTargets;
+    if (phase === 'movement') {
+        getTargets = () => _movedTargetsInHex(targetHex);
+    } else if (phase === 'prepFire') {
+        getTargets = () => _defenderInfantryInHex(targetHex);
+    } else if (phase === 'defensiveFire') {
+        getTargets = () => _attackerInfantryInHex(targetHex);
+    } else {
+        return;   // Fire не поддерживается в этой фазе
+    }
 
     const initialTargets = getTargets();
     if (initialTargets.length === 0) return;
 
-    const firegroupUnits = State.fireGroup.map(id => State.units[id]);
+    let firegroupUnits = State.fireGroup.map(id => State.units[id]);
 
-    // 3.3.3 / 3.2.2 — только для DFF (в PFPh цель не двигается).
-    if (mode === 'dff') {
+    // Final Fire pre-filter: FirstFire — только adjacent/same hex.
+    // FinalFire уже отсечён на addToFireGroup (см. rules.checkIfAddingToFireGroupIsValid).
+    if (phase === 'defensiveFire') {
+        firegroupUnits = firegroupUnits.filter(u => {
+            if (u.firingStatus === 'FirstFire' && hexDistance(u.hex, targetHex) > 1) {
+                console.log(`[final] ${u.id}: FirstFire → только adjacent/same hex`);
+                return false;
+            }
+            return true;
+        });
+        if (firegroupUnits.length === 0) return;
+    }
+
+    // 3.3.3 / 3.2.2 — только в MPh (в других фазах цель не двигается).
+    if (phase === 'movement') {
         const illegalReason = _illegal_targets(initialTargets, firegroupUnits);
         if (illegalReason) { console.log(illegalReason); return; }
     }
 
     const validHexes = Rules.filter_hexes_with_Los(State.fireGroupHexesArray, targetHex, State.orchardInSeason);
-    console.log(`[${mode}] valid ${validHexes.length}/${State.fireGroupHexesArray.length} shooter hexes`);
+    console.log(`[${phase}] valid ${validHexes.length}/${State.fireGroupHexesArray.length} shooter hexes`);
 
     _drawLOS(State.fireGroupHexesArray, targetHex, validHexes);
     const hit = getLastHit();
@@ -255,17 +286,17 @@ async function _handleFire(ctx, mode) {
         const targets = getTargets();
         if (targets.length === 0) break;
 
-        console.log(`[${mode}] sub-FG hexes=${hexesArr.map(h=>`(${h.col},${h.row})`).join(',')} units=${subFG.map(u=>u.id).join(',')}`);
+        console.log(`[${phase}] sub-FG hexes=${hexesArr.map(h=>`(${h.col},${h.row})`).join(',')} units=${subFG.map(u=>u.id).join(',')}`);
 
-        const result = Rules.defensiveFF(subFG, targetHex, targets, State.units, State.orchardInSeason);
+        const result = Rules.fireAttack(subFG, targetHex, targets, State.units, State.orchardInSeason);
         if (result === null) continue;
 
         subFG.forEach(u => firedUnits.add(u.id));
         for (const id of result.weaponsKeepingRoF) weaponsKeepingRoF.add(id);
         await _apply_changes_for_targets(result.changes);
 
-        // DFF-специфика: fired-from history + residual FP.
-        if (mode === 'dff') {
+        // MPh-специфика: fired-from history + residual FP.
+        if (phase === 'movement') {
             _recordFiredFrom(subFG, targets);
             const hexKey = `${targetHex.col},${targetHex.row}`;
             if ((result.residualFP ?? 0) > (State.residualFP[hexKey] ?? 0)) {
@@ -282,8 +313,9 @@ async function _handleFire(ctx, mode) {
         if (!hasLos) firedUnits.add(u.id);
     });
 
-    // firingStatus counter — только для DFF (в PFPh нет FF/FinalFire, есть Prep Fire marker).
-    if (mode === 'dff') {
+    // firingStatus counter — для MPh (DFF) и DFPh (Final Fire).
+    if (phase === 'movement') {
+        // MPh: ' ' → FirstFire → FinalFire
         firegroupUnits.forEach(u => {
             if (!firedUnits.has(u.id)) return;
             if (weaponsKeepingRoF.has(u.id)) return;
@@ -294,10 +326,18 @@ async function _handleFire(ctx, mode) {
                 State.setUnit(u.id, 'firingStatus', 'FirstFire');
             }
         });
+    } else if (phase === 'defensiveFire') {
+        // DFPh: любой стрелявший → FinalFire
+        firegroupUnits.forEach(u => {
+            if (!firedUnits.has(u.id)) return;
+            if (weaponsKeepingRoF.has(u.id)) return;
+            if (u.firingStatus === undefined) return;
+            State.setUnit(u.id, 'firingStatus', 'FinalFire');
+        });
     }
 
     // PFPh-специфика: mark prepFired + снять CX (по правилу PFPh).
-    if (mode === 'prep') {
+    if (phase === 'prepFire') {
         firegroupUnits.forEach(u => {
             if (!firedUnits.has(u.id)) return;
             State.setUnit(u.id, 'prepFired', true);
@@ -315,6 +355,15 @@ function _defenderInfantryInHex(targetHex) {
     return Object.values(State.units).filter(u =>
         u.category === 'infantry' &&
         u.side === 'defender' &&
+        u.hex && isSameHex(u.hex, targetHex)
+    );
+}
+
+// Все attacker-пехотинцы в указанном hex'e (цели для Final Fire в DFPh).
+function _attackerInfantryInHex(targetHex) {
+    return Object.values(State.units).filter(u =>
+        u.category === 'infantry' &&
+        u.side === 'attacker' &&
         u.hex && isSameHex(u.hex, targetHex)
     );
 }
@@ -494,7 +543,7 @@ function _replace_unit(oldId, newTemplateId, newId) {
     });
 }
 
-// применить changes от defensiveFF: { unitId: 'broken'|'pinned'|'eliminated'|'reduced'|'wounded' }
+// применить changes от fireAttack: { unitId: 'broken'|'pinned'|'eliminated'|'reduced'|'wounded' }
 async function _apply_changes_for_targets(changes) {
     for (const [id, state] of Object.entries(changes)) {
         // eliminated — юнит уничтожается физически

@@ -51,7 +51,7 @@ export function runWoundSimulation() {
     const origRandom = Math.random;
     Math.random = () => 0;
 
-    const result = Rules.defensiveFF([shooter], targetHex, hexUnits);
+    const result = Rules.fireAttack([shooter], targetHex, hexUnits);
 
     Math.random = origRandom;
     setRollQueue(null);

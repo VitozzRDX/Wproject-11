@@ -21,7 +21,7 @@ export function runFireSimulation() {
 
     setRollQueue([3, 4, 3, 3]);
 
-    const result = Rules.defensiveFF([shooter], target.hex, [target]);
+    const result = Rules.fireAttack([shooter], target.hex, [target]);
     console.log('РЕЗУЛЬТАТ:', result);
     console.log('=== КОНЕЦ СИМУЛЯЦИИ ===');
 

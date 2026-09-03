@@ -1,6 +1,7 @@
 import { hexDistance, hexLabel, hexToPixel, pixelToHex, isSameHex, R } from './hexUtils.js';
 import { terrainAt } from './cards.js';
 import { bresenham, pixel_is_on_Obstacle_set, setLastHit } from './terrainLOS.js';
+import { PhaseManager } from './phase_manager.js';
 
 const OBSTACLES = ['woods', 'buildings', 'hills'];
 
@@ -379,6 +380,7 @@ function checkLOS(fromHex, toHex, orchardInSeason = false) {
 // FFNAM / FFMO
 // ===========================================================================
 function calcFFNAM(unit) {
+    if (PhaseManager.getPhase() === 'defensiveFire') return 0;   // Final Fire: FFNAM не применяется
     if (!unit.hasStartedMoving) return 0;
     if (unit.broken)            return -1;
     if (unit.pinned)            return 0;
@@ -387,6 +389,7 @@ function calcFFNAM(unit) {
 }
 
 function calcFFMO(unit, targetHex, treeLinedShield = false) {
+    if (PhaseManager.getPhase() === 'defensiveFire') return 0;   // Final Fire: FFMO не применяется
     if (!unit.hasStartedMoving) return 0;
     if (unit.pinned)            return 0;
     if (calcTEM(targetHex, [unit]) > 0) return 0;
@@ -847,7 +850,7 @@ function _check_SFF_valid(firegroupUnits, targetHex, units, orchardInSeason = fa
 
 // Residual FP атака (правило 3.3.5) — одна IFT DR на всех вошедших юнитов.
 // applyFireEffect уже сортирует лидеров first и обрабатывает leader-help pool.
-// DRM = TEM/Smoke цели + FFNAM/FFMO по первому юниту (как hexUnits[0] в defensiveFF).
+// DRM = TEM/Smoke цели + FFNAM/FFMO по первому юниту (как hexUnits[0] в fireAttack).
 function residualAttack(residualFP, targetUnits, targetHex) {
     const col = getIFTColumn(residualFP);
     const arr = IFT[col];
@@ -874,20 +877,20 @@ function residualAttack(residualFP, targetUnits, targetHex) {
     return applyFireEffect(arr[idx], targetUnits);
 }
 
-function defensiveFF(firegroupUnits, targetHex, hexUnits, units, orchardInSeason = false) {
+function fireAttack(firegroupUnits, targetHex, hexUnits, units, orchardInSeason = false) {
     if (!_check_SFF_valid(firegroupUnits, targetHex, units, orchardInSeason)) {
-        console.log('[defensiveFF] SFF constraint violated — атака отменена');
+        console.log('[fireAttack] SFF constraint violated — атака отменена');
         return null;
     }
     if (!_check_FPF_valid(firegroupUnits, targetHex)) {
-        console.log('[defensiveFF] FPF constraint violated — атака отменена');
+        console.log('[fireAttack] FPF constraint violated — атака отменена');
         return null;
     }
 
     // Нет FP (например, только лидер в FG) — стрелять нечем
     const totalFP = calcTotalFirepower(firegroupUnits, targetHex);
     if (totalFP <= 0) {
-        console.log('[defensiveFF] total FP = 0 — стрелять нечем');
+        console.log('[fireAttack] total FP = 0 — стрелять нечем');
         return null;
     }
 
@@ -896,9 +899,9 @@ function defensiveFF(firegroupUnits, targetHex, hexUnits, units, orchardInSeason
     const losOk        = shooterHexes.every(h => checkLOS(h, targetHex, orchardInSeason));
     const hindrance    = checkHindrance(shooterHexes, targetHex);
     const los          = losOk && hindrance < 6;
-    console.log(`[defensiveFF] LOS=${los}`);
+    console.log(`[fireAttack] LOS=${los}`);
     if (!los) {
-        console.log('[defensiveFF] нет LOS — огонь невозможен');
+        console.log('[fireAttack] нет LOS — огонь невозможен');
         return { changes: {} };
     }
 
@@ -917,7 +920,7 @@ function defensiveFF(firegroupUnits, targetHex, hexUnits, units, orchardInSeason
     const leadershipDRM = calcLeadershipDRM(firegroupUnits);
     const totalDRM      = tem + hindrance + ffnam + ffmo + leadershipDRM;
 
-    console.log(`[defensiveFF] TEM=${tem}, HINDRANCE=${hindrance}, FFNAM=${ffnam}, FFMO=${ffmo}, LEADER=${leadershipDRM}, totalDRM=${totalDRM}`);
+    console.log(`[fireAttack] TEM=${tem}, HINDRANCE=${hindrance}, FFNAM=${ffnam}, FFMO=${ffmo}, LEADER=${leadershipDRM}, totalDRM=${totalDRM}`);
 
     const { effect, baseDr, coloredDie } = calcFireEffect(firegroupUnits, targetHex, totalDRM);
     const changes = applyFireEffect(effect, hexUnits);
@@ -1207,6 +1210,11 @@ export const Rules = {
         // сломанный юнит (пехота или weapon) — не стреляет
         if (unit.broken) return false;
 
+        // В DFPh юнит с FinalFire counter не может стрелять (правило Final Fire)
+        if (PhaseManager.getPhase() === 'defensiveFire' &&
+            unit.category === 'infantry' &&
+            unit.firingStatus === 'FinalFire') return false;
+
         if (unit.category === 'carried') {
             // валяется без хозяина
             if (!unit.possessorId) return false;
@@ -1327,7 +1335,7 @@ export const Rules = {
     checkCost,
 
     // огонь
-    defensiveFF,
+    fireAttack,
     residualAttack,
     filter_hexes_with_Los,
     array_of_adjacent_Hexes_arrays,

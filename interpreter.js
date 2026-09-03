@@ -150,6 +150,22 @@ const RULES = [
                 hasUnit:               ctx => ctx.unitId !== undefined,
                 clickedSideIsAttacker: ctx => State.units[ctx.unitId].side === 'attacker',
                 fireGroupIsNotEmpty:   ()  => State.fireGroup.length > 0,
+            },
+            // DFPh: defender добавляется в FG для Final Fire
+            {
+                phaseIsDefensiveFire:  ()  => PhaseManager.getPhase() === 'defensiveFire',
+                leftClick:             ctx => ctx.button !== 2,
+                hasUnit:               ctx => ctx.unitId !== undefined,
+                clickedSideIsDefender: ctx => State.units[ctx.unitId].side === 'defender',
+                fireGroupIsEmpty:      ()  => State.fireGroup.length === 0,
+            },
+            {
+                phaseIsDefensiveFire:  ()  => PhaseManager.getPhase() === 'defensiveFire',
+                shift:                 ctx => ctx.shiftKey,
+                leftClick:             ctx => ctx.button !== 2,
+                hasUnit:               ctx => ctx.unitId !== undefined,
+                clickedSideIsDefender: ctx => State.units[ctx.unitId].side === 'defender',
+                fireGroupIsNotEmpty:   ()  => State.fireGroup.length > 0,
             }
         ],
         name: 'addToFireGroup'
@@ -192,6 +208,15 @@ const RULES = [
                 fireGroupIsNotEmpty:   ()  => State.fireGroup.length > 0,
                 hasUnit:               ctx => ctx.unitId !== undefined,
                 clickedSideIsDefender: ctx => State.units[ctx.unitId].side === 'defender',
+            },
+            // DFPh: target = attacker (Final Fire)
+            {
+                phaseIsDefensiveFire:  ()  => PhaseManager.getPhase() === 'defensiveFire',
+                noShift:               ctx => !ctx.shiftKey,
+                leftClick:             ctx => ctx.button !== 2,
+                fireGroupIsNotEmpty:   ()  => State.fireGroup.length > 0,
+                hasUnit:               ctx => ctx.unitId !== undefined,
+                clickedSideIsAttacker: ctx => State.units[ctx.unitId].side === 'attacker',
             }
         ],
         name: 'Fire'
