@@ -1,11 +1,14 @@
 import { UIState } from './uiState.js';
-import { hexToPixel } from './hexUtils.js';
+import { hexToPixel, R } from './hexUtils.js';
 
 // Два слоя: uiLayer — screen-fixed (кнопки, крутилка); worldFxLayer — world-anchored (LoS, residual, smoke).
 let uiLayer;
 let worldFxLayer;
 const losLines = [];
 const residualNodes = new Map();   // hexKey → Konva.Group для residual FP счётчиков
+const routLegalNodes = [];         // Konva-ноды подсветки легальных rout-hex'ов (green)
+const routShelterNodes = [];       // Konva-ноды подсветки потенциальных укрытий (blue)
+const routPathNodes    = [];       // Konva-ноды подсветки коридора путей до укрытий (purple)
 
 export const RendererUI = {
     // Очищает residualFP-счётчики и LoS-линии на worldFxLayer + все .img-* на uiLayer.
@@ -15,6 +18,12 @@ export const RendererUI = {
         residualNodes.clear();
         losLines.forEach(l => l.destroy());
         losLines.length = 0;
+        routLegalNodes.forEach(n => n.destroy());
+        routLegalNodes.length = 0;
+        routShelterNodes.forEach(n => n.destroy());
+        routShelterNodes.length = 0;
+        routPathNodes.forEach(n => n.destroy());
+        routPathNodes.length = 0;
         worldFxLayer?.batchDraw();
         // Удалить все .img-* (крутилка и другие персистентные UI-картинки)
         uiLayer?.getChildren(n => n.name()?.startsWith('img-')).forEach(n => n.destroy());
@@ -35,6 +44,9 @@ export const RendererUI = {
             if (action === 'flashHitPoints') RendererUI.drawHitPoints(data);
             if (action === 'setResidualFP')  RendererUI.drawResidualCounter(data.hex, data.fp);
             if (action === 'setSmoke')       RendererUI.drawSmoke(data.hex);
+            if (action === 'setRoutLegalHexes') RendererUI.drawRoutLegalHexes(data.hexes);
+            if (action === 'setRoutShelters')   RendererUI.drawRoutShelters(data.hexes);
+            if (action === 'setRoutPathHexes')  RendererUI.drawRoutPathHexes(data.hexes);
         });
 
         // первичная отрисовка уже добавленных кнопок
@@ -150,6 +162,69 @@ export const RendererUI = {
         });
         worldFxLayer.add(group);
         residualNodes.set(key, group);
+        worldFxLayer.batchDraw();
+    },
+
+    // Подсветка легальных hex'ов для routing unit (RtPh): зелёные полупрозрачные ромбы.
+    // Пустой массив → очистить подсветку.
+    drawRoutLegalHexes(hexes) {
+        routLegalNodes.forEach(n => n.destroy());
+        routLegalNodes.length = 0;
+        for (const h of hexes) {
+            const { x, y } = hexToPixel(h.col, h.row);
+            const node = new Konva.RegularPolygon({
+                x, y, sides: 6, radius: R,
+                fill: 'rgba(80,220,80,0.35)',
+                stroke: 'rgba(30,180,30,0.9)',
+                strokeWidth: 2,
+                rotation: 30,
+                listening: false,
+            });
+            worldFxLayer.add(node);
+            routLegalNodes.push(node);
+        }
+        worldFxLayer.batchDraw();
+    },
+
+    // Подсветка потенциальных укрытий router'а (RtPh): синие полупрозрачные ромбы.
+    // Пустой массив → очистить.
+    drawRoutShelters(hexes) {
+        routShelterNodes.forEach(n => n.destroy());
+        routShelterNodes.length = 0;
+        for (const h of hexes) {
+            const { x, y } = hexToPixel(h.col, h.row);
+            const node = new Konva.RegularPolygon({
+                x, y, sides: 6, radius: R,
+                fill: 'rgba(80,140,240,0.35)',
+                stroke: 'rgba(30,80,200,0.9)',
+                strokeWidth: 2,
+                rotation: 30,
+                listening: false,
+            });
+            worldFxLayer.add(node);
+            routShelterNodes.push(node);
+        }
+        worldFxLayer.batchDraw();
+    },
+
+    // Подсветка коридора путей до shelter'ов (RtPh): фиолетовые полупрозрачные ромбы.
+    // Пустой массив → очистить.
+    drawRoutPathHexes(hexes) {
+        routPathNodes.forEach(n => n.destroy());
+        routPathNodes.length = 0;
+        for (const h of hexes) {
+            const { x, y } = hexToPixel(h.col, h.row);
+            const node = new Konva.RegularPolygon({
+                x, y, sides: 6, radius: R,
+                fill: 'rgba(180,80,220,0.30)',
+                stroke: 'rgba(140,30,180,0.9)',
+                strokeWidth: 2,
+                rotation: 30,
+                listening: false,
+            });
+            worldFxLayer.add(node);
+            routPathNodes.push(node);
+        }
         worldFxLayer.batchDraw();
     },
 

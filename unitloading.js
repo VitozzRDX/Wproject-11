@@ -17,7 +17,17 @@ const Infantry         = { ...Unit, category: 'infantry',
                                     desperationMorale: false,
                                     mf_spent_in_current_hex: 0,
                                     smokeAttempted: false,   // сбрасывается в начале MPh (TODO при phase transitions)
-                                    prepFired: false };      // отстрелялся в PFPh → блок мува в MPh
+                                    prepFired: false,        // отстрелялся в PFPh → блок мува в MPh + блок AFPh
+                                    advFired: false,         // отстрелялся в AFPh → нельзя стрелять снова в AFPh
+                                    mustRout: false,         // сломанный юнит, обязан раутиться в RtPh
+                                    inRouting: false,        // выбран как активный router (жёлтая рамка)
+                                    keuIDsList: [],          // ids enemy с LoS до юнита при mustRout (persistent RtPh)
+                                    shelterHexes: [],        // потенциальные укрытия для раута (RtPh cache)
+                                    chosenShelter: null,     // {col,row} выбранного destination или null
+                                    hexToHexesCostsMap: null,// Map — цены от юнита до каждого хекса (RtPh)
+                                    routPathHexes: null,     // Set ключей коридора (заполняется в PickShelter)
+                                    routMinCostToShelter: null, // Map — цены от каждого хекса до shelter'а (для Low Crawl)
+                                    routComputed: false };   // флаг: SelectRouter уже отработал
 const Squad            = { ...Infantry, type: 'squad', mf: 4, leaderBonus: 2, firingStatus: ' ', ipc: 3 };   // MMC
 const Leader           = { ...Infantry, type: 'leader', mf: 6, quality: 'Elite', ipc: 1 };                    // SMC
 const GermanSquad_1st   = { ...Squad,  nation: 'german',   quality: '1stLine', selfRally: true  };
@@ -85,19 +95,19 @@ const TEMPLATES = {
   'am_L81': { ...AmericanLeader, morale: 8, brokenMorale: 8, leadershipModifier: -1, selfRally: true, src: './graf/amL81.gif', brokenSrc: './graf/amL81b.gif' },
 
   // --- Оружие ---
-  'ru_LMG': { ...MG, nation: 'soviet', firepower: 2, range: 6,
+  'ru_LMG': { ...MG, nation: 'soviet', firepower: 2, range: 6, mgClass: 'LMG',
               breakdownNumber: 11, rof: 1, repairNumber: 2, portagePoints: 1,
               src: './graf/ruLMG.gif', brokenSrc: './graf/ruLMGb.gif' },
-  'ge_HMG': { ...MG, nation: 'german', firepower: 7, range: 16,
+  'ge_HMG': { ...MG, nation: 'german', firepower: 7, range: 16, mgClass: 'HMG',
               breakdownNumber: 12, rof: 3, repairNumber: 3, portagePoints: 4,
               src: './graf/geHMG.gif', brokenSrc: './graf/geHMGb.gif' },
-  'ge_LMG': { ...MG, nation: 'german', firepower: 3, range: 8,
+  'ge_LMG': { ...MG, nation: 'german', firepower: 3, range: 8, mgClass: 'LMG',
               breakdownNumber: 12, rof: 1, repairNumber: 1, portagePoints: 1,
               src: './graf/geLMG.gif', brokenSrc: './graf/geLMGb.gif' },
-  'ge_MMG': { ...MG, nation: 'german', firepower: 5, range: 12,
+  'ge_MMG': { ...MG, nation: 'german', firepower: 5, range: 12, mgClass: 'MMG',
               breakdownNumber: 12, rof: 2, repairNumber: 2, portagePoints: 3,
               src: './graf/geMMG.gif', brokenSrc: './graf/geMMGb.gif' },
-  'am_MMG': { ...MG, nation: 'american', firepower: 5, range: 12,
+  'am_MMG': { ...MG, nation: 'american', firepower: 5, range: 12, mgClass: 'MMG',
               breakdownNumber: 12, rof: 2, repairNumber: 2, portagePoints: 3,
               src: './graf/amMMG.gif', brokenSrc: './graf/amMMGb.gif' },
 };
@@ -284,7 +294,46 @@ const pfText = new Konva.Text({
     listening: false,
 });
 
-    group.add(image, movedRect, movedText, activeRect, activeText, selectRect, addToMovementGroupRect, addToFireGroupRect, cxText, pinBg, pinText, dmText, woundedRect, woundedCross, woundedText, ffRect, ffText, ffBigText, pfText);
+const afRect = new Konva.Rect({
+    x: 0, y: h - 8,
+    width: w, height: 8,
+    fill: 'white',
+    visible: false,
+    name: 'afRect',
+    listening: false,
+});
+const afText = new Konva.Text({
+    x: 0, y: h - 8,
+    width: w, height: 8,
+    text: 'fired', fill: 'red', fontSize: 7, fontStyle: 'bold',
+    align: 'center', verticalAlign: 'middle',
+    visible: false,
+    name: 'afText',
+    listening: false,
+});
+
+const mustRoutRect = new Konva.Rect({
+    x: 0, y: 0,
+    width: w, height: h,
+    stroke: 'red',
+    strokeWidth: 2,
+    dash: [4, 3],
+    visible: false,
+    name: 'mustRoutRect',
+    listening: false,
+});
+
+const inRoutingRect = new Konva.Rect({
+    x: 0, y: 0,
+    width: w, height: h,
+    stroke: 'yellow',
+    strokeWidth: 2,
+    visible: false,
+    name: 'inRoutingRect',
+    listening: false,
+});
+
+    group.add(image, movedRect, movedText, activeRect, activeText, selectRect, addToMovementGroupRect, addToFireGroupRect, cxText, pinBg, pinText, dmText, woundedRect, woundedCross, woundedText, ffRect, ffText, ffBigText, pfText, afRect, afText, mustRoutRect, inRoutingRect);
     
     const unit = { ...data, node: group };
 

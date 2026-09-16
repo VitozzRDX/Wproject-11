@@ -137,6 +137,24 @@ export function initRenderer() {
             node.findOne('.pfText').visible(value);
         }
 
+        // Adv Fire marker — юнит отстрелялся в AFPh (белая полоска снизу + "fired")
+        if (key === 'advFired') {
+            node.findOne('.afRect').visible(value);
+            node.findOne('.afText').visible(value);
+        }
+
+        // Must-rout marker — красная пунктирная рамка (RtPh identification)
+        if (key === 'mustRout') {
+            node.findOne('.mustRoutRect').visible(value);
+            if (value) node.moveToTop();
+        }
+
+        // Router selection — жёлтая рамка (юнит выбран для раута)
+        if (key === 'inRouting') {
+            node.findOne('.inRoutingRect').visible(value);
+            if (value) node.moveToTop();
+        }
+
         // Полоска "active" — юнит начал двигаться (но не закончил)
         if (key === 'hasStartedMoving') {
             const completed = State.units[id].movementCompleted;

@@ -125,10 +125,130 @@ export function isSameHex(a, b) {
   return a.col === b.col && a.row === b.row;
 }
 
+// Соседние ли два хекса (расстояние 1).
+export function isAdjacent(a, b) {
+  return hexDistance(a, b) === 1;
+}
+
 export function hexDistance(a, b) {
   const ca = offsetToCube(a.col, a.row);
   const cb = offsetToCube(b.col, b.row);
   return (Math.abs(ca.x - cb.x) + Math.abs(ca.y - cb.y) + Math.abs(ca.z - cb.z)) / 2;
+}
+
+// Возвращает hex'ы на кольце заданного радиуса от center.
+// Простая реализация: перебираем bounding box (±radius по col/row), фильтруем по hexDistance.
+export function cubeRing(center, radius) {
+  if (radius === 0) return [center];
+  const result = [];
+  for (let dc = -radius; dc <= radius; dc++) {
+    for (let dr = -radius; dr <= radius; dr++) {
+      const hex = { col: center.col + dc, row: center.row + dr };
+      if (hexDistance(center, hex) === radius) result.push(hex);
+    }
+  }
+  return result;
+}
+
+// -----------------------------------------------------------------------------
+// Обход хексов волнами (BFS) от startHex. Каждая волна = хексы на 1 шаг
+// дальше предыдущей. Ребро (from → to) берём только если isLegalRoutStep вернул true.
+// Возвращает hexes_parentHexes: Map, по которой восстанавливается путь.
+// maxSteps — предел радиуса от старта в шагах. За этот предел волна не идёт.
+// -----------------------------------------------------------------------------
+export function bfsHexes(startHex, maxSteps, isLegalRoutStep) {
+  const hexKey = h => `${h.col},${h.row}`;
+
+  // Map: каждый достигнутый хекс → хекс, из которого в него пришли.
+  // Стартового хекса тут нет. По этой карте восстанавливается путь.
+  const hexes_parentHexes = new Map();  // { "3,3" => (3,2), "3,4" => (3,3), "2,3" => (3,2) }
+
+  // Множество уже посещённых хексов — чтобы не разворачивать их повторно.
+  const visited = new Set([hexKey(startHex)]);  // { "3,2", "3,3", "3,4", "2,3" }
+
+  // Очередь волны: пара [хекс, радиус от старта в шагах].
+  const queue = [[startHex, 0]];  // [ [(3,2), 0], [(3,3), 1], [(2,3), 1], [(3,4), 2] ]
+
+  while (queue.length) {
+    const [currentHex, radiusFromStart] = queue.shift();  // на первой итерации: [startHex, 0]
+
+    // Дошли до предела радиуса — соседей не разворачиваем.
+    if (radiusFromStart >= maxSteps) continue;
+
+    for (const neighborHex of calcNearestHexes(currentHex)) {  // для каждого соседа текущего гекса
+      const neighborKey = hexKey(neighborHex);
+      if (visited.has(neighborKey)) continue;                            // проверяем находится ли он в visited — если да, пропускаем
+      if (!isLegalRoutStep(currentHex, neighborHex)) continue;           // проверяем легален ли этот гекс (отвечает KEU)
+
+      visited.add(neighborKey);                                          // прошло все проверки — добавляем в посещённые
+      hexes_parentHexes.set(neighborKey, currentHex);                    // на первой итерации: { "neighborKey" => startHex }
+      queue.push([neighborHex, radiusFromStart + 1]);                    // на первой итерации: [neighborHex, 1]
+    }
+    // результат полного цикла первой итерации [[neighborHex1,1], ..., [neighborHex6,1]] если все 6 легальны
+  }
+  return hexes_parentHexes;
+}
+
+// -----------------------------------------------------------------------------
+// Dijkstra от startHex. В отличие от BFS учитывает стоимость входа в хекс.
+// Ребро (from → to) берём только если isEdgeAllowed вернул true.
+// stepCost(from, to) — стоимость перехода (число, >= 0).
+// Возвращает { hexes_parentHexes, bestCostToReach }: карту родителей (для
+// восстановления путей через reconstructPath) и карту минимальных стоимостей.
+// maxCost — предел суммарной стоимости (например, MF-бюджет).
+// -----------------------------------------------------------------------------
+export function dijkstraHexes(startHex, maxCost, isEdgeAllowed, stepCost) {
+  const hexKey = h => `${h.col},${h.row}`;
+
+  // Куда пришли → откуда пришли (для восстановления путей).
+  const hexes_parentHexes = new Map();
+
+  // Куда пришли → минимальная известная стоимость. Стартовый хекс — 0.
+  const bestCostToReach = new Map([[hexKey(startHex), 0]]);  // { "3,2" => 0, "3,3" => 1, "3,4" => 3 }
+
+  // Приоритетная очередь: [хекс, суммарная стоимость]. Каждый shift — sort по цене.
+  const queue = [[startHex, 0]];
+
+  while (queue.length) {
+    queue.sort((a, b) => a[1] - b[1]);                        // минимум в начало
+    const [currentHex, costSoFar] = queue.shift();
+
+    // Устаревшая запись — мы уже нашли путь дешевле. Пропускаем.
+    if (costSoFar > bestCostToReach.get(hexKey(currentHex))) continue;
+
+    for (const neighborHex of calcNearestHexes(currentHex)) {
+      if (!isEdgeAllowed(currentHex, neighborHex)) continue;
+
+      const cost = costSoFar + stepCost(currentHex, neighborHex);
+      if (cost > maxCost) continue;                            // не влезает в бюджет
+
+      const known = bestCostToReach.get(hexKey(neighborHex)) ?? Infinity;
+      if (cost < known) {                                      // нашли дешевле — обновляем
+        bestCostToReach.set(hexKey(neighborHex), cost);
+        hexes_parentHexes.set(hexKey(neighborHex), currentHex);
+        queue.push([neighborHex, cost]);
+      }
+    }
+  }
+  return { hexes_parentHexes, bestCostToReach };
+}
+
+// -----------------------------------------------------------------------------
+// Восстанавливает путь startHex → goalHex по карте hexes_parentHexes из bfsHexes.
+// Идёт назад от цели по родителям. Возвращает [] если goal не достигнут.
+// -----------------------------------------------------------------------------
+export function reconstructPath(hexes_parentHexes, startHex, goalHex) {
+  const hexKey = h => `${h.col},${h.row}`;
+  const path   = [];
+
+  // Идём от цели назад: каждый раз спрашиваем карту "откуда пришли сюда?".
+  // Когда родителя нет (undefined) — это старт, цикл останавливается.
+  for (let hex = goalHex; hex; hex = hexes_parentHexes.get(hexKey(hex))) {
+    path.unshift(hex);
+  }
+
+  // Если первый элемент не старт — goal был недостижим.
+  return path.length && isSameHex(path[0], startHex) ? path : [];
 }
 
 // Новые координаты → пиксель. Конвертируем в старые (see pixelToHex).

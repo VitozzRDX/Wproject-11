@@ -1,4 +1,4 @@
-import { hexDistance, hexLabel, hexToPixel, pixelToHex, isSameHex, R } from './hexUtils.js';
+import { hexDistance, hexLabel, hexToPixel, pixelToHex, isSameHex, R, calcNearestHexes, cubeRing, dijkstraHexes } from './hexUtils.js';
 import { terrainAt } from './cards.js';
 import { bresenham, pixel_is_on_Obstacle_set, setLastHit } from './terrainLOS.js';
 import { PhaseManager } from './phase_manager.js';
@@ -91,6 +91,11 @@ function calcFirepower(unit, targetHex) {
     // FPF (Final Protective Fire): FinalFire counter → тоже halved
     // (precondition dist ≤ 1 проверяется отдельно в _check_FPF_valid)
     if (unit.firingStatus === 'FinalFire') {
+        fp = fp / 2;
+    }
+
+    // AFPh (Advancing Fire): весь огонь идёт с половинной FP.
+    if (PhaseManager.getPhase() === 'advancingFire') {
         fp = fp / 2;
     }
 
@@ -817,6 +822,18 @@ function _closest_enemy_distance(shooter, units, orchardInSeason = false) {
     return min;
 }
 
+// Final Fire (DFPh): FirstFire-стрелок может атаковать только adjacent/same hex.
+// Нарушение любого юнита → вся FG не стреляет.
+function _check_DFPh_FinalFire_valid(firegroupUnits, targetHex) {
+    for (const u of firegroupUnits) {
+        if (u.firingStatus === 'FirstFire' && hexDistance(u.hex, targetHex) > 1) {
+            console.log(`[Final Fire blocked] ${u.id}: FirstFire → только adjacent/same hex`);
+            return false;
+        }
+    }
+    return true;
+}
+
 // FPF-precondition: FinalFire-стрелок может атаковать только adjacent или same hex
 function _check_FPF_valid(firegroupUnits, targetHex) {
     for (const u of firegroupUnits) {
@@ -877,15 +894,232 @@ function residualAttack(residualFP, targetUnits, targetHex) {
     return applyFireEffect(arr[idx], targetUnits);
 }
 
+// Правило 3.2.2: юниты в одном hex, атакующие одну цель, обязаны стрелять как единая FG.
+// Если в текущей FG есть юнит из shooter-hex'а, которого не было в оригинальной группе
+// стрелявших по этой цели → нарушение. Возвращает true если нарушено (лог внутри).
+// firedFromRecord = State.fired_from_on_target_in_hex (передаётся, чтобы rules остались pure).
+// Good Order shooter: способен interdict / вызывать must-rout condition (b).
+// unbroken, unpinned, не CX (halved FP), не FirstFire/FinalFire (halved FP), FP > 0.
+function _isGoodOrderShooter(u) {
+    if (u.broken || u.pinned) return false;
+    if (u.exhausted) return false;                                  // CX = halved FP
+    if (u.firingStatus === 'FirstFire' || u.firingStatus === 'FinalFire') return false;
+    if (u.type === 'leader') return false;                          // одиночный leader не стреляет (упрощение)
+    if (!u.firepower || u.firepower <= 0) return false;
+    return true;
+}
+
+// Возвращает потенциальные укрытия для router'а (RtPh):
+// woods/building/Woods-Road хексы, до которых реально дойти за 6 MF по легальному
+// (не сокращающему range к KEU) пути. Из всех достижимых оставляет только БЛИЖАЙШИЕ
+// по MF (могут быть несколько с одинаковой минимальной ценой — ничья).
+// Кэшируется на юните (unit.shelterHexes) при mustRout identification.
+function findRoutShelter(router, keuUnits) {
+    // Dijkstra от юнита. Возвращает минимальную MF-цену до каждого достижимого хекса.
+    // Фильтр рёбер — правило KEU (не сокращать range).
+    // Стоимость шага — checkCost, Woods-Road автоматически как forest в rout-фазе.
+    const { bestCostToReach } = dijkstraHexes(
+        router.hex,
+        6,   // MF-бюджет
+        (from, to) => isLegalRoutStep(from, to, keuUnits),
+        (from, to) => {
+            const t = terrainAt(to.col, to.row);
+            const asForest = t.includes('Woods-Road') ? 'forest' : null;
+            return checkCost(to, from, asForest);
+        }
+    );
+
+    // Собираем все shelter-хексы (по terrain'у) с их MF-стоимостью.
+    const candidates = [];
+    for (const [key, cost] of bestCostToReach) {
+        const [col, row] = key.split(',').map(Number);
+        const terrain = terrainAt(col, row);
+        const isShelter = terrain.some(t =>
+            t === 'forest' || t === 'woodenBuilding' || t === 'stoneBuilding' || t === 'Woods-Road'
+        );
+        if (isShelter) candidates.push({ col, row, cost });
+    }
+    if (!candidates.length) return [];
+
+    // Правило ASL: юнит рутится к БЛИЖАЙШЕМУ (в MF) shelter'у. Оставляем только те,
+    // что достижимы за минимальную цену — если несколько с равной ценой, все считаются
+    // одинаково валидными, игрок выберет любой.
+    const minCost = Math.min(...candidates.map(c => c.cost));
+    return candidates
+        .filter(c => c.cost === minCost)
+        .map(({ col, row }) => ({ col, row }));
+}
+
+// -----------------------------------------------------------------------------
+// Строит карту кратчайших расстояний (в MF) от startHex до каждого хекса,
+// куда можно легально дойти в бюджете maxCost. Использует Dijkstra.
+//
+// Внутри всё: per-step KEU-фильтр + Woods-Road как forest (rout-правило).
+//
+// Флаг reverse:
+//   false — forward Dijkstra от startHex (волна вперёд, шаги current → neighbor).
+//   true  — reverse Dijkstra: волна назад от startHex, но forward-шаг это
+//           neighbor → current (в направлении к startHex). Даёт "min MF от каждого
+//           хекса ДО startHex по forward-легальному пути".
+//
+// Возвращает Map<"col,row", mfCost>.
+// -----------------------------------------------------------------------------
+function calc_hex_to_every_hex_dist_map(startHex, keuUnits, maxCost = 6, reverse = false) {
+    const hexKey = h => `${h.col},${h.row}`;
+    const hexToHexesCostsMap = new Map([[hexKey(startHex), 0]]);
+    const queue = [[startHex, 0]];
+
+    while (queue.length) {
+        queue.sort((a, b) => a[1] - b[1]);
+        const [currentHex, costSoFar] = queue.shift();
+        if (costSoFar > hexToHexesCostsMap.get(hexKey(currentHex))) continue;
+
+        for (const neighborHex of calcNearestHexes(currentHex)) {
+            // Всегда моделируем FORWARD-шаг. При reverse=false он = current→neighbor;
+            // при reverse=true = neighbor→current (волна назад, шаг вперёд).
+            const from = reverse ? neighborHex : currentHex;
+            const to   = reverse ? currentHex  : neighborHex;
+
+            if (!isLegalRoutStep(from, to, keuUnits)) continue;
+
+            // Цена входа В to (target forward-шага).
+            const t = terrainAt(to.col, to.row);
+            const asForest = t.includes('Woods-Road') ? 'forest' : null;
+            const cost = costSoFar + checkCost(to, from, asForest);
+            if (cost > maxCost) continue;
+
+            const neighborKey = hexKey(neighborHex);
+            const known = hexToHexesCostsMap.get(neighborKey) ?? Infinity;
+            if (cost >= known) continue;
+
+            hexToHexesCostsMap.set(neighborKey, cost);
+            queue.push([neighborHex, cost]);
+        }
+    }
+    return hexToHexesCostsMap;
+}
+
+// -----------------------------------------------------------------------------
+// Из карты цен от current выбирает shelter-хексы с минимальной MF-стоимостью
+// (nearest-by-MF). Ничьи возвращает все.
+// -----------------------------------------------------------------------------
+function pickNearestShelters(costsFromCurrent) {
+    const candidates = [];
+    costsFromCurrent.forEach((cost, key) => {
+        const [col, row] = key.split(',').map(Number);
+        const t = terrainAt(col, row);
+        const isShelter = t.some(x =>
+            x === 'forest' || x === 'woodenBuilding' || x === 'stoneBuilding' || x === 'Woods-Road'
+        );
+        if (isShelter) candidates.push({ col, row, cost });
+    });
+    if (!candidates.length) return [];
+
+    const minCost = Math.min(...candidates.map(c => c.cost));
+    return candidates
+        .filter(c => c.cost === minCost)
+        .map(({ col, row }) => ({ col, row }));
+}
+
+// Легальный ли шаг для routing unit: не сокращает range ни до одного KEU.
+function isLegalRoutStep(fromHex, toHex, keuUnits) {
+    for (const keu of keuUnits) {
+        const oldDist = hexDistance(fromHex, keu.hex);
+        const newDist = hexDistance(toHex, keu.hex);
+        if (newDist < oldDist) return false;
+    }
+    return true;
+}
+
+// Легальные adjacent-hex'ы для одного шага routing unit'а.
+function legalRoutNeighbors(unit, keuUnits) {
+    return calcNearestHexes(unit.hex).filter(h => isLegalRoutStep(unit.hex, h, keuUnits));
+}
+
+// KEU-list для routing юнита: все enemy юниты, имеющие LoS до него.
+// Строится один раз при выборе router'а, persistent на весь RtPh для этого юнита.
+// Используется для правила "may not rout in any way which decreases range to KEU" —
+// LoS достаточно (даже broken enemy, per rule "even if broken").
+function buildKEUList(unit, units, orchardInSeason = false) {
+    const keu = [];
+    for (const other of Object.values(units)) {
+        if (other.side === unit.side) continue;
+        if (other.category === 'carried') continue;
+        if (!checkLOS(other.hex, unit.hex, orchardInSeason)) continue;
+        keu.push(other);
+    }
+    return keu;
+}
+
+// Должен ли сломанный юнит раутиться в RtPh (3.6):
+//   (a) adjacent/same hex к unbroken enemy unit;
+//   (b) в Open Ground unemplaced + в normal range + LoS Good Order enemy с FP≥1.
+function mustRout(unit, units, orchardInSeason = false) {
+    if (!unit.broken) return false;
+    if (unit.category === 'carried') return false;                  // weapon сам по себе не раутится
+
+    // (a) adjacent или same hex к unbroken enemy
+    for (const other of Object.values(units)) {
+        if (other.side === unit.side) continue;
+        if (other.broken) continue;
+        if (other.category === 'carried') continue;
+        if (hexDistance(unit.hex, other.hex) <= 1) return true;
+    }
+
+    // (b) в Open Ground + Good Order enemy в normal range + LoS
+    const terrain = terrainAt(unit.hex.col, unit.hex.row);
+    const openGround = terrain.length === 0;
+    if (openGround) {
+        for (const other of Object.values(units)) {
+            if (other.side === unit.side) continue;
+            if (!_isGoodOrderShooter(other)) continue;
+            if (hexDistance(other.hex, unit.hex) > other.range) continue;
+            if (!checkLOS(other.hex, unit.hex, orchardInSeason)) continue;
+            return true;
+        }
+    }
+    return false;
+}
+
+function _check_separate_attack(targets, firegroupUnits, firedFromRecord) {
+    for (const shooter of firegroupUnits) {
+        const shooterLabel = hexLabel(shooter.hex.col, shooter.hex.row);
+        const record = firedFromRecord[shooterLabel] || {};
+        for (const t of targets) {
+            const entry = record[t.id];
+            if (!entry) continue;
+            const shootersFromThisHex = firegroupUnits
+                .filter(f => hexLabel(f.hex.col, f.hex.row) === shooterLabel)
+                .map(f => f.id);
+            if (shootersFromThisHex.some(id => !entry.firers.includes(id))) {
+                console.log(`Rule 3.2.2: юниты в одном hex, стреляющие в одну цель, обязаны стрелять как единая FG (hex ${shooterLabel}, цель ${t.id})`);
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+// Правило 3.3.3: количество выстрелов из одного hex по одной цели не должно превышать MF,
+// которые цель потратила на вход в текущий гекс. Возвращает true если нарушено (лог внутри).
+function _check_shots_exceed_mf(targets, firegroupUnits, firedFromRecord) {
+    for (const shooter of firegroupUnits) {
+        const shooterLabel = hexLabel(shooter.hex.col, shooter.hex.row);
+        const record = firedFromRecord[shooterLabel] || {};
+        for (const t of targets) {
+            const entry = record[t.id];
+            if (!entry) continue;
+            if (entry.count >= t.mf_spent_in_current_hex) {
+                console.log(`Rule 3.3.3: из hex ${shooterLabel} по цели ${t.id} уже ${entry.count} выстрел(ов) = MF цели (${t.mf_spent_in_current_hex}), больше нельзя`);
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
 function fireAttack(firegroupUnits, targetHex, hexUnits, units, orchardInSeason = false) {
-    if (!_check_SFF_valid(firegroupUnits, targetHex, units, orchardInSeason)) {
-        console.log('[fireAttack] SFF constraint violated — атака отменена');
-        return null;
-    }
-    if (!_check_FPF_valid(firegroupUnits, targetHex)) {
-        console.log('[fireAttack] FPF constraint violated — атака отменена');
-        return null;
-    }
+    // SFF/FPF валидируются вызывающим кодом (engine._handleFire) до adjacency-split.
 
     // Нет FP (например, только лидер в FG) — стрелять нечем
     const totalFP = calcTotalFirepower(firegroupUnits, targetHex);
@@ -1215,6 +1449,16 @@ export const Rules = {
             unit.category === 'infantry' &&
             unit.firingStatus === 'FinalFire') return false;
 
+        // AFPh (Advancing Fire) ограничения:
+        //   — юнит, стрелявший в PFPh (prepFired) — не может.
+        //   — юнит, уже стрелявший в AFPh (advFired) — не может ("no weapon fires more than once").
+        //   — MMG/HMG, если possessor двигался в MPh — не может.
+        if (PhaseManager.getPhase() === 'advancingFire') {
+            if (unit.prepFired) return false;
+            if (unit.advFired)  return false;
+            if (unit.category === 'infantry' && unit.hasStartedMoving && false) { /* infantry не блокируется движением в AFPh */ }
+        }
+
         if (unit.category === 'carried') {
             // валяется без хозяина
             if (!unit.possessorId) return false;
@@ -1223,6 +1467,17 @@ export const Rules = {
             if (possessor.broken || possessor.pinned) return false;
             // Национальность weapon = национальность possessor'а (можно владеть трофейным)
             if (possessor.side !== firingSide) return false;
+
+            // AFPh: MMG/HMG не могут стрелять если possessor двигался в MPh.
+            if (PhaseManager.getPhase() === 'advancingFire' &&
+                (unit.mgClass === 'MMG' || unit.mgClass === 'HMG') &&
+                possessor.hasStartedMoving) {
+                return false;
+            }
+            // AFPh: weapon уже стрелял в AFPh?
+            if (PhaseManager.getPhase() === 'advancingFire' && unit.advFired) return false;
+            // AFPh: possessor стрелял в PFPh → его weapon тоже не может.
+            if (PhaseManager.getPhase() === 'advancingFire' && possessor.prepFired) return false;
         } else {
             // Своя национальность у пехоты
             if (unit.side !== firingSide) return false;
@@ -1336,6 +1591,19 @@ export const Rules = {
 
     // огонь
     fireAttack,
+    checkSFFValid: _check_SFF_valid,
+    checkFPFValid: _check_FPF_valid,
+    checkDFPhFinalFireValid: _check_DFPh_FinalFire_valid,
+    check_separate_attack:   _check_separate_attack,
+    check_shots_exceed_mf:   _check_shots_exceed_mf,
+    mustRout,
+    buildKEUList,
+    checkLOS,
+    findRoutShelter,
+    isLegalRoutStep,
+    legalRoutNeighbors,
+    calc_hex_to_every_hex_dist_map,
+    pickNearestShelters,
     residualAttack,
     filter_hexes_with_Los,
     array_of_adjacent_Hexes_arrays,

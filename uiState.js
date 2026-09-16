@@ -48,4 +48,16 @@ export const UIState = {
     setSmoke(hex) {
         this.subscribers.forEach(sub => sub('setSmoke', null, { hex }));
     },
+
+    setRoutLegalHexes(hexes) {
+        this.subscribers.forEach(sub => sub('setRoutLegalHexes', null, { hexes }));
+    },
+
+    setRoutShelters(hexes) {
+        this.subscribers.forEach(sub => sub('setRoutShelters', null, { hexes }));
+    },
+
+    setRoutPathHexes(hexes) {
+        this.subscribers.forEach(sub => sub('setRoutPathHexes', null, { hexes }));
+    },
 }

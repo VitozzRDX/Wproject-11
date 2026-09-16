@@ -1,6 +1,7 @@
 import { Engine } from './engine.js'
 import { State } from './state.js'
-import { PhaseManager } from './phase_manager.js'   
+import { PhaseManager } from './phase_manager.js'
+import { pixelToHex, isSameHex } from './hexUtils.js'
 
 
 function createContext(e) {
@@ -166,6 +167,22 @@ const RULES = [
                 hasUnit:               ctx => ctx.unitId !== undefined,
                 clickedSideIsDefender: ctx => State.units[ctx.unitId].side === 'defender',
                 fireGroupIsNotEmpty:   ()  => State.fireGroup.length > 0,
+            },
+            // AFPh: attacker добавляется в FG для Advancing Fire
+            {
+                phaseIsAdvancingFire:  ()  => PhaseManager.getPhase() === 'advancingFire',
+                leftClick:             ctx => ctx.button !== 2,
+                hasUnit:               ctx => ctx.unitId !== undefined,
+                clickedSideIsAttacker: ctx => State.units[ctx.unitId].side === 'attacker',
+                fireGroupIsEmpty:      ()  => State.fireGroup.length === 0,
+            },
+            {
+                phaseIsAdvancingFire:  ()  => PhaseManager.getPhase() === 'advancingFire',
+                shift:                 ctx => ctx.shiftKey,
+                leftClick:             ctx => ctx.button !== 2,
+                hasUnit:               ctx => ctx.unitId !== undefined,
+                clickedSideIsAttacker: ctx => State.units[ctx.unitId].side === 'attacker',
+                fireGroupIsNotEmpty:   ()  => State.fireGroup.length > 0,
             }
         ],
         name: 'addToFireGroup'
@@ -217,9 +234,58 @@ const RULES = [
                 fireGroupIsNotEmpty:   ()  => State.fireGroup.length > 0,
                 hasUnit:               ctx => ctx.unitId !== undefined,
                 clickedSideIsAttacker: ctx => State.units[ctx.unitId].side === 'attacker',
+            },
+            // AFPh: target = defender (Advancing Fire)
+            {
+                phaseIsAdvancingFire:  ()  => PhaseManager.getPhase() === 'advancingFire',
+                noShift:               ctx => !ctx.shiftKey,
+                leftClick:             ctx => ctx.button !== 2,
+                fireGroupIsNotEmpty:   ()  => State.fireGroup.length > 0,
+                hasUnit:               ctx => ctx.unitId !== undefined,
+                clickedSideIsDefender: ctx => State.units[ctx.unitId].side === 'defender',
             }
         ],
         name: 'Fire'
+    },
+    // RtPh: клик по must-rout юниту → выбор для раута
+    {
+        requiresAny: [{
+            phaseIsRout:     ()  => PhaseManager.getPhase() === 'rout',
+            leftClick:       ctx => ctx.button !== 2,
+            hasUnit:         ctx => ctx.unitId !== undefined,
+            clickedMustRout: ctx => State.units[ctx.unitId].mustRout === true,
+        }],
+        name: 'SelectRouter'
+    },
+    // RtPh: клик по одному из подсвеченных shelter-хексов → выбор destination.
+    // ДОЛЖНО идти перед RoutMove — иначе клик по shelter'у будет обработан как мув.
+    {
+        requiresAny: [{
+            phaseIsRout:    ()  => PhaseManager.getPhase() === 'rout',
+            leftClick:      ctx => ctx.button !== 2,
+            hasRoutingUnit: ()  => State.routingUnit !== null,
+            noChosenShelter: () => !State.units[State.routingUnit]?.chosenShelter,
+            clickedShelter: ctx => {
+                const u = State.units[State.routingUnit];
+                if (!u?.shelterHexes?.length) return false;
+                const h = pixelToHex(ctx.pos.x, ctx.pos.y);
+                return u.shelterHexes.some(s => isSameHex(s, h));
+            },
+        }],
+        name: 'PickShelter'
+    },
+    // RtPh: клик по hex'у (когда есть активный router и выбран destination или free-rout).
+    {
+        requiresAny: [{
+            phaseIsRout:   ()  => PhaseManager.getPhase() === 'rout',
+            leftClick:     ctx => ctx.button !== 2,
+            routingActive: ()  => State.routingUnit !== null,
+            readyToMove:   ()  => {
+                const u = State.units[State.routingUnit];
+                return u?.chosenShelter || !u?.shelterHexes?.length;   // destination выбран ИЛИ free-rout mode
+            },
+        }],
+        name: 'RoutMove'
     },
 
 ]
