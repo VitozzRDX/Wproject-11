@@ -135,7 +135,7 @@ async function loadScenario(name) {
 
     // 4. Параметры сценария
     State.orchardInSeason = scen.orchardInSeason;
-    PhaseManager.setPhase('rally');
+    PhaseManager.setPhase('rout');
 
     // 5. Пиксельные наборы + hexmap
     await initTerrainLOS(scen.pixelsUrl, scen.roadsUrl);

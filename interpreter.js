@@ -254,6 +254,7 @@ const RULES = [
             leftClick:       ctx => ctx.button !== 2,
             hasUnit:         ctx => ctx.unitId !== undefined,
             clickedMustRout: ctx => State.units[ctx.unitId].mustRout === true,
+            noActiveRouter:  ()  => State.routingUnit === null,   // нельзя переключаться пока текущий не EndRout
         }],
         name: 'SelectRouter'
     },
@@ -273,6 +274,15 @@ const RULES = [
             },
         }],
         name: 'PickShelter'
+    },
+    // RtPh: клик по кнопке EndRout → финализация с elimination-check.
+    {
+        requiresAny: [{
+            phaseIsRout:          ()  => PhaseManager.getPhase() === 'rout',
+            leftClick:            ctx => ctx.button !== 2,
+            clickedEndRoutButton: ctx => ctx.buttonLabel === 'EndRout',
+        }],
+        name: 'EndRout'
     },
     // RtPh: клик по hex'у (когда есть активный router и выбран destination или free-rout).
     {

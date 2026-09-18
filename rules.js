@@ -1006,6 +1006,7 @@ function calc_hex_to_every_hex_dist_map(startHex, keuUnits, maxCost = 6, reverse
 function pickNearestShelters(costsFromCurrent) {
     const candidates = [];
     costsFromCurrent.forEach((cost, key) => {
+        if (cost === 0) return;   // текущий хекс — не destination, надо двигаться
         const [col, row] = key.split(',').map(Number);
         const t = terrainAt(col, row);
         const isShelter = t.some(x =>
@@ -1021,12 +1022,17 @@ function pickNearestShelters(costsFromCurrent) {
         .map(({ col, row }) => ({ col, row }));
 }
 
-// Легальный ли шаг для routing unit: не сокращает range ни до одного KEU.
+// Легальный ли шаг для routing unit:
+//   1) не сокращает range ни до одного KEU;
+//   2) если сейчас adjacent к KEU — нельзя шагать в другой хекс тоже adjacent к тому же KEU
+//      (unless leaving that enemy's location — т.е. выход из стека с ним).
 function isLegalRoutStep(fromHex, toHex, keuUnits) {
     for (const keu of keuUnits) {
         const oldDist = hexDistance(fromHex, keu.hex);
         const newDist = hexDistance(toHex, keu.hex);
         if (newDist < oldDist) return false;
+        // adjacent → adjacent к тому же KEU запрещено (кроме выхода из его хекса).
+        if (oldDist === 1 && newDist === 1 && !isSameHex(fromHex, keu.hex)) return false;
     }
     return true;
 }

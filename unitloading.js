@@ -378,17 +378,30 @@ export async function createAndLoadUnits(layer, scenarioUnits) {
             side: record.side,   // 'attacker' | 'defender' — из сценария
             hex: resolvedHex,
             path: [{ hex: resolvedHex, isRoad: Rules._isRoadHex(resolvedHex) }],
+            ...(record.state || {}),   // scenario-level overrides (broken, desperationMorale, cx, ...)
         };
         if (record.possessorId) template.possessorId = record.possessorId;
 
         // ELR per-unit: юниты без lowerQuality (Conscript, leader) не подвержены quality reduce
         template.elr = tmpl.lowerQuality ? (State.elr[tmpl.nation] ?? 3) : 20;
 
-        const image    = await loadImage(template.src);
+        // Broken → сразу грузим broken-спрайт (иначе покажется целым).
+        const initialSrc = (template.broken && tmpl.brokenSrc) ? tmpl.brokenSrc : template.src;
+        const image    = await loadImage(initialSrc);
         const { x, y } = hexToPixel(resolvedHex.col, resolvedHex.row);
         const cx       = x - image.width  / 2;
         const cy       = y - image.height / 2;
         createUnit({ ...template, image, x: cx, y: cy }, layer);
+
+        // Прогнать overrides через State.setUnit чтобы renderer/подписчики подхватили
+        // визуалы (dm rect, mustRout border и т.д.). Пропускаем broken — image уже
+        // создан из brokenSrc, а renderer.broken делает flip-анимацию которая тут не нужна.
+        if (record.state) {
+            for (const [k, v] of Object.entries(record.state)) {
+                if (k === 'broken') continue;
+                State.setUnit(record.id, k, v);
+            }
+        }
 
         // предзагрузка half-squad картинок (для мгновенной замены)
         const hsId = tmpl.halfSquad;

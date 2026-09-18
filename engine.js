@@ -141,6 +141,7 @@ const handlers = {
 
         console.log(`[RtPh] selected ${uid}, MF=6, KEU=[${keuIDs.join(',')}], shelters=${shelters.length}`);
 
+        UIState.addButton('EndRout', { x: 20, y: 100, label: 'EndRout' });   // единственный способ завершить рут
         _redrawRoutOverlay(State.units[uid]);
     },
 
@@ -165,74 +166,84 @@ const handlers = {
 
         if (!isAdjacent(unit.hex, targetHex)) return;
 
-        // Легальность: коридор ИЛИ (в free-rout mode) isLegalRoutStep.
+        // Легальность: per-step KEU-правило + (если есть коридор) хекс должен быть в нём.
+        // Коридор говорит "хекс достижим по КАКОМУ-ТО легальному пути от старта", но не
+        // гарантирует легальность конкретного шага current→target — его проверяем отдельно.
         const keuUnitsOld = unit.keuIDsList.map(id => State.units[id]);
-        const legal = unit.routPathHexes
-            ? unit.routPathHexes.has(targetKey)
-            : Rules.isLegalRoutStep(unit.hex, targetHex, keuUnitsOld);
-        if (!legal) {
-            console.log(`[RtPh] ${unit.id}: (${targetHex.col},${targetHex.row}) не легален`);
-            return;
-        }
+        if (!Rules.isLegalRoutStep(unit.hex, targetHex, keuUnitsOld)) return;
+        if (unit.routPathHexes && !unit.routPathHexes.has(targetKey)) return;
 
         // Cost + move (Woods-Road автоматически как forest в rout-фазе).
         const isWoodsRoad = Rules._hasWoodsRoad(targetHex);
         const cost = Rules.checkCost(targetHex, unit.hex, isWoodsRoad ? 'forest' : null);
-        if (unit.mf < cost) {
-            console.log(`[RtPh] ${unit.id}: не хватает MF (${unit.mf} < ${cost})`);
-            return;
-        }
+        if (unit.mf < cost) { console.log(`[RtPh] ${unit.id}: не хватает MF (${unit.mf} < ${cost})`); return; }
 
         const isRoad = isWoodsRoad ? false : Rules._isRoadHex(targetHex);
         State.setUnit(unit.id, 'path', [...unit.path, { hex: targetHex, isRoad }]);
         State.setUnit(unit.id, 'mf', unit.mf - cost);
         State.setUnit(unit.id, 'hex', targetHex);
         if (isWoodsRoad) State.setUnit(unit.id, 'usedWoodsRoad', true);
+        State.setUnit(unit.id, 'mustRout', false);   // обязанность двинуться выполнена — при EndRout больше не эллиминируем
         console.log(`[RtPh] ${unit.id} → (${targetHex.col},${targetHex.row}), MF=${unit.mf}`);
 
-        // Auto-end: пришли в chosenShelter ИЛИ MF=0.
-        const reachedShelter = unit.chosenShelter && isSameHex(unit.chosenShelter, targetHex);
-        const mfExhausted   = unit.mf === 0;
-        if (reachedShelter || mfExhausted) {
-            UIState.setRoutShelters([]);
-            UIState.setRoutPathHexes([]);
-            UIState.setRoutLegalHexes([]);
-            State.setUnit(unit.id, 'inRouting', false);
-            State.setUnit(unit.id, 'mustRout', false);
-            State.setUnit(unit.id, 'hexToHexesCostsMap', null);
-            _clearCorridor(unit);
-            State.setUnit(unit.id, 'routComputed', false);
-            State.routingUnit = null;
-            console.log(`[RtPh] ${unit.id} rout ended (${reachedShelter ? 'shelter' : 'MF=0'})`);
-            return;
-        }
-
-        // Обновить KEU-список с новой позиции.
+        // (B) Обновить KEU ДО auto-end — в самом shelter'е может открыться новый observer.
         const oldKEUIDs = unit.keuIDsList;
         const newKEUIDs = _updateKEUList(unit, oldKEUIDs);
-
-        if (newKEUIDs.length === oldKEUIDs.length) return;   // KEU не менялся → ничего не пересчитываем
-
-        State.setUnit(unit.id, 'keuIDsList', newKEUIDs);     // KEU расширился → пересчёт
-        console.log(`[RtPh] ${unit.id} new KEU: [${newKEUIDs.filter(id => !oldKEUIDs.includes(id)).join(',')}]`);
+        if (newKEUIDs.length > oldKEUIDs.length) {
+            State.setUnit(unit.id, 'keuIDsList', newKEUIDs);
+            console.log(`[RtPh] ${unit.id} new KEU: [${newKEUIDs.filter(id => !oldKEUIDs.includes(id)).join(',')}]`);
+        }
         const keuUnits = newKEUIDs.map(id => State.units[id]);
+
+        // (A) Auto-end: chosenShelter достигнут И не смежен с unbroken enemy → safe finalize.
+        // MF=0 больше НЕ автоend — игрок жмёт EndRout (там elimination-check).
+        // Если reached но adjacent — shelter не годится, сбрасываем destination и форсим пересчёт.
+        const reachedShelter = unit.chosenShelter && isSameHex(unit.chosenShelter, targetHex);
+        if (reachedShelter) {
+            if (!_adjacentUnbrokenEnemy(unit)) { _finalizeRout(unit); return; }
+            _clearCorridor(unit);   // adjacent к enemy — shelter не годится, сбрасываем destination
+            console.log(`[RtPh] ${unit.id} at shelter but adjacent to enemy → find new destination`);
+        }
+
+        // (C) Пересчёт коридора при расширении KEU ИЛИ если только что достигли (и обнулили) shelter.
+        if (newKEUIDs.length === oldKEUIDs.length && !reachedShelter) { _redrawRoutOverlay(unit); return; }
 
         const newCostsFromCurrent = Rules.calc_hex_to_every_hex_dist_map(unit.hex, keuUnits, unit.mf);   // forward от новой позиции с новым KEU и остатком MF
         State.setUnit(unit.id, 'hexToHexesCostsMap', newCostsFromCurrent);
 
-        const chosenKey = unit.chosenShelter ? `${unit.chosenShelter.col},${unit.chosenShelter.row}` : null;
-        const oldStillReachable = chosenKey && newCostsFromCurrent.has(chosenKey);   // старый chosenShelter всё ещё достижим?
-
-        if (oldStillReachable) {
+        if (unit.chosenShelter && newCostsFromCurrent.has(`${unit.chosenShelter.col},${unit.chosenShelter.row}`)) {
             _buildCorridor(unit, unit.chosenShelter, keuUnits, unit.mf, newCostsFromCurrent);
         } else {
             const newShelters = Rules.pickNearestShelters(newCostsFromCurrent);   // destination потерян → ищем новый nearest
             State.setUnit(unit.id, 'shelterHexes', newShelters);
             _clearCorridor(unit);
-            console.log(`[RtPh] ${unit.id} destination lost → ${newShelters.length ? `pick new nearest (${newShelters.length})` : 'free-rout'}`);
+            console.log(`[RtPh] ${unit.id} destination lost → ${newShelters.length ? `pick new (${newShelters.length})` : 'free-rout'}`);
         }
 
         _redrawRoutOverlay(unit);
+    },
+
+    EndRout: () => {
+        const unit = State.units[State.routingUnit];
+        if (!unit) return;
+
+        // Eliminate: остался adjacent к unbroken enemy.
+        const adjacentEnemy = _adjacentUnbrokenEnemy(unit);
+        if (adjacentEnemy) {
+            console.log(`[RtPh] ${unit.id} eliminated: ends adjacent to unbroken ${adjacentEnemy.id}`);
+            _remove_unit(unit.id);
+            _finalizeRoutState();
+            return;
+        }
+        // Eliminate: обязан был раутиться, но не двинулся ни разу.
+        if (unit.mustRout) {
+            console.log(`[RtPh] ${unit.id} eliminated: failed to rout (never moved)`);
+            _remove_unit(unit.id);
+            _finalizeRoutState();
+            return;
+        }
+        console.log(`[RtPh] ${unit.id} rout ended (safe)`);
+        _finalizeRout(unit);
     },
 
     NextPhase: () => {
@@ -303,6 +314,7 @@ const handlers = {
             UIState.setRoutLegalHexes([]);
             UIState.setRoutShelters([]);
             UIState.setRoutPathHexes([]);
+            UIState.removeButton('EndRout');
             console.log('[RtPh end] cleared all rout state');
         }
     },
@@ -481,6 +493,35 @@ function _clearCorridor(unit) {
     State.setUnit(unit.id, 'chosenShelter', null);
     State.setUnit(unit.id, 'routPathHexes', null);
     State.setUnit(unit.id, 'routMinCostToShelter', null);
+}
+
+// Возвращает первого смежного unbroken enemy (или null).
+function _adjacentUnbrokenEnemy(unit) {
+    return Object.values(State.units).find(other =>
+        other.side !== unit.side &&
+        other.category !== 'carried' &&
+        !other.broken &&
+        isAdjacent(unit.hex, other.hex)
+    ) || null;
+}
+
+// Финализация раута для одного юнита (safe): очистка полей + overlay + кнопки.
+function _finalizeRout(unit) {
+    State.setUnit(unit.id, 'inRouting', false);
+    State.setUnit(unit.id, 'mustRout', false);
+    State.setUnit(unit.id, 'hexToHexesCostsMap', null);
+    _clearCorridor(unit);
+    State.setUnit(unit.id, 'routComputed', false);
+    _finalizeRoutState();
+}
+
+// Общая очистка глобального rout-state + overlay + кнопки.
+function _finalizeRoutState() {
+    UIState.setRoutShelters([]);
+    UIState.setRoutPathHexes([]);
+    UIState.setRoutLegalHexes([]);
+    UIState.removeButton('EndRout');
+    State.routingUnit = null;
 }
 
 async function _handleFire(ctx) {
