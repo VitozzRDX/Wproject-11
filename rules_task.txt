@@ -87,3 +87,96 @@ This is a Leader Loss Morale Check (LLMC).
 An already broken unit that fails a MC suffers Casualty Reduction; an already
 broken unit that rolls an original 12 on a MC is eliminated.
 Broken units use the morale level printed on their broken side for all MC.
+
+3.6 Rout Phase (RtPh)
+During the RtPh a broken unit not in Melee may not end a RtPh adjacent to
+or in the same location as an unbroken Known Enemy Unit and may not remain
+unemplaced in the same Open Ground location in the normal range and LOS of a
+Known Good Order enemy unit that is unbroken, unpinned, has no any form of
+halved FP or positive DRM (e.g., a CX unit, a lone leader with a MG) and
+capable of firing on it in that hex with at least one FP.
+Such a unit is placed under a DM counter and if not in Melee must rout away
+(ATTACKER first — one unit at a time) during that RtPh or be eliminated for
+failure to rout.
+All broken units have 6 MF for use in the RtPh; this amount can never be
+increased.
+A broken unit may rout into an Open Ground hex in the LOS and normal range of
+a Known Enemy Unit without Interdiction (see below) only if it has used Low
+Crawl, but it still may not be adjacent to an unbroken Known Enemy Unit at the
+end of the RtPh or it will be eliminated for failure to rout.
+Low Crawl is a rout of one hex that requires the entire MF allotment of the
+routing unit. A routing unit using Low Crawl cannot be interdicted. All other
+rout provisions apply unchanged to Low Crawl.
+
+A routing unit must move to the nearest (in MF, along a legal rout path)
+building or woods hex within 6 MF.
+In so doing, a routing unit may not rout toward an enemy unit (even if it is
+broken) while in that enemy's LOS, in any way which decreases the range in
+hexes between the routing unit and the Known Enemy Unit, nor may it move
+towards such a unit after leaving its LOS during that RtPh; nor if adjacent to
+an enemy unit may it move to another hex adjacent to that same enemy unit,
+unless in doing so it is leaving that enemy unit's location.
+Otherwise a routing unit may move towards an enemy unit.
+Upon reaching the nearest legal woods or building hex not adjacent to an enemy
+unit, a routing unit must stop and end its RtPh in that building or woods hex.
+
+A routing unit must ignore any building or woods hex that it cannot enter due
+to stacking limits and may also ignore a building or woods hex if that hex is
+no further away from a Known Enemy Unit than its starting hex.
+If no building or woods can be reached during that RtPh, a broken unit may
+rout to any hex consistent with the above restrictions.
+A broken unit may rout if under DM.
+
+If a routing unit has a legal rout destination, it MUST move to that
+destination hex in that RtPh. The only time this is not true is when the
+routing unit is using Low Crawl.
+
+However, a routing unit will occasionally discover during its rout that it can
+no longer legally continue to move towards its rout destination. When this
+occurs, a new rout destination must be immediately selected, based on the
+unused MF that the routing unit has remaining. The routing unit must then rout
+to this new rout destination.
+
+If a routing unit discovers that it cannot legally reach its rout destination,
+and it has no other legal rout destination, it then may continue its rout
+without a rout destination, as described in the previous section.
+
+Must A Routing Unit Always Take The Shortest Path To Its Rout Destination?
+No. As long as a routing unit reaches its rout destination, it is not required
+to use the shortest path. But a Low Crawl must always be made towards the
+unit's rout destination (if there is one).
+
+Interdiction occurs whenever a routing unit enters an Open Ground hex without
+using Low Crawl while in the normal range and LOS of an unbroken, unpinned
+enemy unit capable of firing on it in that hex with at least one FP.
+A unit/Weapon which has any form of halved FP or positive DRM (e.g., a CX
+unit, a lone leader with a MG) cannot interdict.
+If Interdiction occurs, then the routing unit is subject to a NMC and
+everything that normally entails.
+A routing unit that fails its Interdiction NMC suffers Casualty Reduction,
+although any remaining HS may continue to rout thereafter.
+Interdiction does not affect other units in the hex and units are capable of
+Interdiction even if they have exhausted all other fire options for that Player
+Turn. An interdicted unit that suffers a pin result on its NMC may not rout
+further that RtPh and, if still adjacent to a Known Enemy Unit, is eliminated
+for failure to rout. A broken unit may not be interdicted more than once per
+Open Ground hex entered, regardless of the number of enemy units that can
+claim Interdiction.
+The FFMO DRM is negated if there is a Hindrance between the routing unit and
+the interdictor.
+
+Rout Phase Summary
+- Routing may use 6 MF.
+- Must rout if adjacent to an unbroken enemy unit.
+- Must rout from its starting hex if a hypothetical unit routing through that
+  hex would be subject to Interdiction.
+- May rout only if under a DM counter.
+- When routing, must rout towards the nearest building or woods that is not
+  closer to a Known Enemy Unit.
+- Interdiction can occur if routing in Open Ground, normal range, and
+  unhindered LOS of enemy unit without using Low Crawl.
+- Low Crawl is a rout of one hex consistent with above rules that protects
+  against Interdiction.
+- Units that must rout but cannot are eliminated.
+- If woods/building cannot be reached in a single RtPh (i.e., more than 6 MF
+  away), unit may rout to any terrain consistent with all other requirements.

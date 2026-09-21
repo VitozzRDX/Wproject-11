@@ -548,6 +548,14 @@ function calcFireEffect(units, targetHex, drm = 0) {
 // Обработка MC для группы целей.
 // Лидеры проверяются первыми (лучший по морали → худший), каждый использует
 // накопленный лидер-DRM от прошедших unharmed. Non-leaders — с полным DRM.
+// Прогоняет MC для каждого юнита из targets. МУТИРУЕТ переданный объект result:
+// на каждого пострадавшего пишет result[unitId] = 'broken' | 'pinned' | 'reduced' |
+// 'eliminated' | 'quality_reduce' | 'reduce_then_quality'. Юниты, прошедшие check
+// без последствий, в result не пишутся.
+// Аккумуляция в один result нужна когда одна серия огня триггерит MC + LLMC + LLTC —
+// все накопятся вместе, потом engine применит одним махом.
+// k       — доп DRM к DR цели (например IFT-column "1MC" = k=1, FFMO interdiction = k=1).
+// fixedDr — если задан, используется вместо 2d6 (для сценариев/тестов).
 function _processMC(targets, k, result, fixedDr = null) {
     targets = targets.filter(u => u.category !== 'carried');   // weapons без morale — не проходят MC
     // Сортировка лидеров по эффективной морали (broken → brokenMorale)
@@ -658,9 +666,10 @@ function _woundLeader(u) {
     if (dr > 4) return 'eliminated';
     u.wounded = true;
     u.morale -= 1;
+    u.brokenMorale -= 1;   // wound действует и на broken-стороне SMC
     u.leadershipModifier = (u.leadershipModifier ?? 0) + 1;
     u.mf = Math.min(u.mf, 3);   // wounded SMC has 3 MF
-    console.log(`[wound light] ${u.id}: morale→${u.morale}, DRM→${u.leadershipModifier}, mf→${u.mf}`);
+    console.log(`[wound light] ${u.id}: morale→${u.morale}, brokenMorale→${u.brokenMorale}, DRM→${u.leadershipModifier}, mf→${u.mf}`);
     return 'wounded';
 }
 
@@ -921,7 +930,7 @@ function findRoutShelter(router, keuUnits) {
     const { bestCostToReach } = dijkstraHexes(
         router.hex,
         6,   // MF-бюджет
-        (from, to) => isLegalRoutStep(from, to, keuUnits),
+        (from, to) => check_KEU_range_and_adjacency(from, to, keuUnits),
         (from, to) => {
             const t = terrainAt(to.col, to.row);
             const asForest = t.includes('Woods-Road') ? 'forest' : null;
@@ -980,7 +989,7 @@ function calc_hex_to_every_hex_dist_map(startHex, keuUnits, maxCost = 6, reverse
             const from = reverse ? neighborHex : currentHex;
             const to   = reverse ? currentHex  : neighborHex;
 
-            if (!isLegalRoutStep(from, to, keuUnits)) continue;
+            if (!check_KEU_range_and_adjacency(from, to, keuUnits)) continue;
 
             // Цена входа В to (target forward-шага).
             const t = terrainAt(to.col, to.row);
@@ -1003,16 +1012,20 @@ function calc_hex_to_every_hex_dist_map(startHex, keuUnits, maxCost = 6, reverse
 // Из карты цен от current выбирает shelter-хексы с минимальной MF-стоимостью
 // (nearest-by-MF). Ничьи возвращает все.
 // -----------------------------------------------------------------------------
-function pickNearestShelters(costsFromCurrent) {
+function pickNearestShelters(costsFromCurrent, routerId, units, unitHex = null, minDist = 0) {
     const candidates = [];
     costsFromCurrent.forEach((cost, key) => {
         if (cost === 0) return;   // текущий хекс — не destination, надо двигаться
         const [col, row] = key.split(',').map(Number);
+        if (unitHex && hexDistance(unitHex, { col, row }) <= minDist) return;   // фильтр по hex-дистанции (further-tier поиск)
         const t = terrainAt(col, row);
         const isShelter = t.some(x =>
             x === 'forest' || x === 'woodenBuilding' || x === 'stoneBuilding' || x === 'Woods-Road'
         );
-        if (isShelter) candidates.push({ col, row, cost });
+        if (!isShelter) return;
+        // По ASL: shelter, куда не влезаем по stacking limits, обязательно игнорируем.
+        if (!checkOverstack({ col, row }, [routerId], units)) return;
+        candidates.push({ col, row, cost });
     });
     if (!candidates.length) return [];
 
@@ -1022,11 +1035,27 @@ function pickNearestShelters(costsFromCurrent) {
         .map(({ col, row }) => ({ col, row }));
 }
 
+// Interdiction NMC для broken routing unit. Escort leader (если есть) добавляет
+// свой leadershipModifier как DRM. Отличие от обычного broken MC: результат
+// "равно морали" (pin) прерывает раут — юнит остаётся стоять с pinned=true.
+function interdictionAttack(unit, escortLeader = null) {
+    const baseDr = roll2d6();
+    const leaderDrm = escortLeader ? (escortLeader.leadershipModifier ?? 0) : 0;
+    const finalDr = baseDr + leaderDrm;
+    const morale = unit.brokenMorale;
+    console.log(`[Interdiction NMC] ${unit.id}: DR=${baseDr}, leaderDRM=${leaderDrm}, итог=${finalDr}, brokenMorale=${morale}`);
+
+    if (baseDr === 12) return 'eliminated';
+    if (finalDr > morale)   return _casualtyReduction(unit);   // 'reduced' | 'eliminated' | 'wounded'
+    if (finalDr === morale) return 'pinned';                    // interdiction-specific pin
+    return 'ok';
+}
+
 // Легальный ли шаг для routing unit:
 //   1) не сокращает range ни до одного KEU;
 //   2) если сейчас adjacent к KEU — нельзя шагать в другой хекс тоже adjacent к тому же KEU
 //      (unless leaving that enemy's location — т.е. выход из стека с ним).
-function isLegalRoutStep(fromHex, toHex, keuUnits) {
+function check_KEU_range_and_adjacency(fromHex, toHex, keuUnits) {
     for (const keu of keuUnits) {
         const oldDist = hexDistance(fromHex, keu.hex);
         const newDist = hexDistance(toHex, keu.hex);
@@ -1039,7 +1068,7 @@ function isLegalRoutStep(fromHex, toHex, keuUnits) {
 
 // Легальные adjacent-hex'ы для одного шага routing unit'а.
 function legalRoutNeighbors(unit, keuUnits) {
-    return calcNearestHexes(unit.hex).filter(h => isLegalRoutStep(unit.hex, h, keuUnits));
+    return calcNearestHexes(unit.hex).filter(h => check_KEU_range_and_adjacency(unit.hex, h, keuUnits));
 }
 
 // KEU-list для routing юнита: все enemy юниты, имеющие LoS до него.
@@ -1604,9 +1633,11 @@ export const Rules = {
     check_shots_exceed_mf:   _check_shots_exceed_mf,
     mustRout,
     buildKEUList,
+    checkHindrance,
     checkLOS,
     findRoutShelter,
-    isLegalRoutStep,
+    interdictionAttack,
+    check_KEU_range_and_adjacency,
     legalRoutNeighbors,
     calc_hex_to_every_hex_dist_map,
     pickNearestShelters,

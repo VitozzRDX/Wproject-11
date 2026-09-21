@@ -111,6 +111,18 @@ export function initRenderer() {
             node.findOne('.dmText').visible(value);
         }
 
+        // Escort leader — красная рамка (та же что selectRect) и наверх стека.
+        if (key === 'escortingRouter') {
+            node.findOne('.selectRect').visible(!!value);
+            if (value) node.moveToTop();
+        }
+
+        // KIA — временный визуал перед удалением юнита.
+        if (key === 'kia') {
+            node.findOne('.kiaText').visible(value);
+            if (value) node.moveToTop();
+        }
+
         // wounded — белая полоска сверху: жирный "+" слева, "wound" по центру
         if (key === 'wounded') {
             node.findOne('.woundedRect').visible(value);
@@ -143,15 +155,12 @@ export function initRenderer() {
             node.findOne('.afText').visible(value);
         }
 
-        // Must-rout marker — красная пунктирная рамка (RtPh identification)
-        if (key === 'mustRout') {
-            node.findOne('.mustRoutRect').visible(value);
-            if (value) node.moveToTop();
-        }
-
-        // Router selection — жёлтая рамка (юнит выбран для раута)
-        if (key === 'inRouting') {
-            node.findOne('.inRoutingRect').visible(value);
+        // mustRoutRect (пунктир) виден пока юнит не выбран как router; inRoutingRect
+        // (solid red) появляется при выборе, пунктир прячется.
+        if (key === 'mustRout' || key === 'inRouting') {
+            const u = State.units[id];
+            node.findOne('.mustRoutRect').visible(u.mustRout && !u.inRouting);
+            node.findOne('.inRoutingRect').visible(u.inRouting);
             if (value) node.moveToTop();
         }
 

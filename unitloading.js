@@ -27,7 +27,10 @@ const Infantry         = { ...Unit, category: 'infantry',
                                     hexToHexesCostsMap: null,// Map — цены от юнита до каждого хекса (RtPh)
                                     routPathHexes: null,     // Set ключей коридора (заполняется в PickShelter)
                                     routMinCostToShelter: null, // Map — цены от каждого хекса до shelter'а (для Low Crawl)
-                                    routComputed: false };   // флаг: SelectRouter уже отработал
+                                    routComputed: false,     // флаг: SelectRouter уже отработал
+                                    usedLowCrawl: false,     // ставится handler'ом LowCrawl (для F пока всегда false)
+                                    kia: false,              // временный "KIA" визуал перед удалением юнита
+                                    escortingRouter: null }; // id router'а которого сопровождает (для leader'а)
 const Squad            = { ...Infantry, type: 'squad', mf: 4, leaderBonus: 2, firingStatus: ' ', ipc: 3 };   // MMC
 const Leader           = { ...Infantry, type: 'leader', mf: 6, quality: 'Elite', ipc: 1 };                    // SMC
 const GermanSquad_1st   = { ...Squad,  nation: 'german',   quality: '1stLine', selfRally: true  };
@@ -312,11 +315,21 @@ const afText = new Konva.Text({
     listening: false,
 });
 
+const kiaText = new Konva.Text({
+    x: 0, y: (h - 16) / 2,
+    width: w, height: 16,
+    text: 'KIA', fill: 'red', fontSize: 16, fontStyle: 'bold',
+    align: 'center', verticalAlign: 'middle',
+    visible: false,
+    name: 'kiaText',
+    listening: false,
+});
+
 const mustRoutRect = new Konva.Rect({
     x: 0, y: 0,
     width: w, height: h,
     stroke: 'red',
-    strokeWidth: 2,
+    strokeWidth: 1,
     dash: [4, 3],
     visible: false,
     name: 'mustRoutRect',
@@ -326,14 +339,14 @@ const mustRoutRect = new Konva.Rect({
 const inRoutingRect = new Konva.Rect({
     x: 0, y: 0,
     width: w, height: h,
-    stroke: 'yellow',
-    strokeWidth: 2,
+    stroke: 'red',
+    strokeWidth: 1,
     visible: false,
     name: 'inRoutingRect',
     listening: false,
 });
 
-    group.add(image, movedRect, movedText, activeRect, activeText, selectRect, addToMovementGroupRect, addToFireGroupRect, cxText, pinBg, pinText, dmText, woundedRect, woundedCross, woundedText, ffRect, ffText, ffBigText, pfText, afRect, afText, mustRoutRect, inRoutingRect);
+    group.add(image, movedRect, movedText, activeRect, activeText, selectRect, addToMovementGroupRect, addToFireGroupRect, cxText, pinBg, pinText, dmText, woundedRect, woundedCross, woundedText, ffRect, ffText, ffBigText, pfText, afRect, afText, mustRoutRect, inRoutingRect, kiaText);
     
     const unit = { ...data, node: group };
 

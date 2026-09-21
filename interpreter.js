@@ -255,8 +255,30 @@ const RULES = [
             hasUnit:         ctx => ctx.unitId !== undefined,
             clickedMustRout: ctx => State.units[ctx.unitId].mustRout === true,
             noActiveRouter:  ()  => State.routingUnit === null,   // нельзя переключаться пока текущий не EndRout
+            attackerFirst:   ctx => {                             // ASL 3.6: attacker-mustRout юниты рутятся первыми
+                if (State.units[ctx.unitId].side === 'attacker') return true;
+                return !Object.values(State.units).some(u => u.side === 'attacker' && u.mustRout);
+            },
         }],
         name: 'SelectRouter'
+    },
+    // RtPh: Shift+клик на unpinned leader'е в хексе router'а → toggle escort.
+    {
+        requiresAny: [{
+            phaseIsRout:      ()  => PhaseManager.getPhase() === 'rout',
+            leftClick:        ctx => ctx.button !== 2,
+            shiftHeld:        ctx => ctx.shiftKey,
+            hasUnit:          ctx => ctx.unitId !== undefined,
+            activeRouter:     ()  => State.routingUnit !== null,
+            clickedLeader:    ctx => State.units[ctx.unitId].type === 'leader',
+            leaderUnpinned:   ctx => !State.units[ctx.unitId].pinned,
+            leaderInRouterHex: ctx => {
+                const l = State.units[ctx.unitId];
+                const r = State.units[State.routingUnit];
+                return r && isSameHex(l.hex, r.hex);
+            },
+        }],
+        name: 'EscortWithLeader'
     },
     // RtPh: клик по одному из подсвеченных shelter-хексов → выбор destination.
     // ДОЛЖНО идти перед RoutMove — иначе клик по shelter'у будет обработан как мув.
@@ -283,6 +305,15 @@ const RULES = [
             clickedEndRoutButton: ctx => ctx.buttonLabel === 'EndRout',
         }],
         name: 'EndRout'
+    },
+    // RtPh: клик по кнопке LowCrawl → arm mode, следующий RoutMove работает по LC правилам.
+    {
+        requiresAny: [{
+            phaseIsRout:           ()  => PhaseManager.getPhase() === 'rout',
+            leftClick:             ctx => ctx.button !== 2,
+            clickedLowCrawlButton: ctx => ctx.buttonLabel === 'LowCrawl',
+        }],
+        name: 'ArmLowCrawl'
     },
     // RtPh: клик по hex'у (когда есть активный router и выбран destination или free-rout).
     {

@@ -131,7 +131,14 @@ const handlers = {
         const hexToHexesCostsMap = Rules.calc_hex_to_every_hex_dist_map(u.hex, keuUnits, 6);
 
         // 3. Nearest-by-MF shelter'ы (пустой массив если ни один не достижим).
-        const shelters = Rules.pickNearestShelters(hexToHexesCostsMap);
+        let shelters = Rules.pickNearestShelters(hexToHexesCostsMap, uid, State.units);   // обычный nearest — как было
+
+        const nearestKEUDist = Math.min(...keuUnits.map(k => hexDistance(u.hex, k.hex)));  // расстояние до ближайшего KEU (в гексах)
+
+        if (shelters.length && !shelters.some(s => hexDistance(u.hex, s) > nearestKEUDist)) {   // если ни один nearest не дальше чем KEU
+            const further = Rules.pickNearestShelters(hexToHexesCostsMap, uid, State.units, u.hex, nearestKEUDist);   // ищем следующий MF-tier строго дальше KEU
+            shelters = [...shelters, ...further];   // добавляем к nearest
+        }
 
         // Кэшируем на юните.
         State.setUnit(uid, 'hexToHexesCostsMap', hexToHexesCostsMap);
@@ -141,7 +148,8 @@ const handlers = {
 
         console.log(`[RtPh] selected ${uid}, MF=6, KEU=[${keuIDs.join(',')}], shelters=${shelters.length}`);
 
-        UIState.addButton('EndRout', { x: 20, y: 100, label: 'EndRout' });   // единственный способ завершить рут
+        UIState.addButton('EndRout',  { x: 20, y: 100, label: 'EndRout' });    // единственный способ завершить рут
+        UIState.addButton('LowCrawl', { x: 20, y: 140, label: 'LowCrawl' });   // доступна пока не сделан обычный ход
         _redrawRoutOverlay(State.units[uid]);
     },
 
@@ -159,71 +167,51 @@ const handlers = {
         _redrawRoutOverlay(unit);
     },
 
-    RoutMove: (ctx) => {
+    // async — только чтобы дождаться sleep(300) в _handleInterdiction перед показом
+    // результата interdiction'а (анимация мува = Konva tween 0.3с, чтобы не "рвать" юнит).
+    RoutMove: async (ctx) => {
         const unit = State.units[State.routingUnit];
+        if (unit.pinned) return;   // pinned не раутится, только EndRout
+
         const targetHex = pixelToHex(ctx.pos.x, ctx.pos.y);
-        const targetKey = `${targetHex.col},${targetHex.row}`;
+        if (!isLegalRoutStep(unit, targetHex)) return;
 
-        if (!isAdjacent(unit.hex, targetHex)) return;
-
-        // Легальность: per-step KEU-правило + (если есть коридор) хекс должен быть в нём.
-        // Коридор говорит "хекс достижим по КАКОМУ-ТО легальному пути от старта", но не
-        // гарантирует легальность конкретного шага current→target — его проверяем отдельно.
-        const keuUnitsOld = unit.keuIDsList.map(id => State.units[id]);
-        if (!Rules.isLegalRoutStep(unit.hex, targetHex, keuUnitsOld)) return;
-        if (unit.routPathHexes && !unit.routPathHexes.has(targetKey)) return;
-
-        // Cost + move (Woods-Road автоматически как forest в rout-фазе).
         const isWoodsRoad = Rules._hasWoodsRoad(targetHex);
-        const cost = Rules.checkCost(targetHex, unit.hex, isWoodsRoad ? 'forest' : null);
-        if (unit.mf < cost) { console.log(`[RtPh] ${unit.id}: не хватает MF (${unit.mf} < ${cost})`); return; }
+        if (unit.mf < Rules.checkCost(targetHex, unit.hex, isWoodsRoad ? 'forest' : null)) return;
 
-        const isRoad = isWoodsRoad ? false : Rules._isRoadHex(targetHex);
-        State.setUnit(unit.id, 'path', [...unit.path, { hex: targetHex, isRoad }]);
-        State.setUnit(unit.id, 'mf', unit.mf - cost);
-        State.setUnit(unit.id, 'hex', targetHex);
-        if (isWoodsRoad) State.setUnit(unit.id, 'usedWoodsRoad', true);
-        State.setUnit(unit.id, 'mustRout', false);   // обязанность двинуться выполнена — при EndRout больше не эллиминируем
-        console.log(`[RtPh] ${unit.id} → (${targetHex.col},${targetHex.row}), MF=${unit.mf}`);
+        _applyRoutMove(unit, targetHex, isWoodsRoad);
+        _updateRoutKEU(unit);
 
-        // (B) Обновить KEU ДО auto-end — в самом shelter'е может открыться новый observer.
-        const oldKEUIDs = unit.keuIDsList;
-        const newKEUIDs = _updateKEUList(unit, oldKEUIDs);
-        if (newKEUIDs.length > oldKEUIDs.length) {
-            State.setUnit(unit.id, 'keuIDsList', newKEUIDs);
-            console.log(`[RtPh] ${unit.id} new KEU: [${newKEUIDs.filter(id => !oldKEUIDs.includes(id)).join(',')}]`);
-        }
-        const keuUnits = newKEUIDs.map(id => State.units[id]);
-
-        // (A) Auto-end: chosenShelter достигнут И не смежен с unbroken enemy → safe finalize.
-        // MF=0 больше НЕ автоend — игрок жмёт EndRout (там elimination-check).
-        // Если reached но adjacent — shelter не годится, сбрасываем destination и форсим пересчёт.
-        const reachedShelter = unit.chosenShelter && isSameHex(unit.chosenShelter, targetHex);
-        if (reachedShelter) {
-            if (!_adjacentUnbrokenEnemy(unit)) { _finalizeRout(unit); return; }
-            _clearCorridor(unit);   // adjacent к enemy — shelter не годится, сбрасываем destination
-            console.log(`[RtPh] ${unit.id} at shelter but adjacent to enemy → find new destination`);
+        if (!unit.usedLowCrawl && _isOpenGround(unit.hex)) {
+            if (await _handleInterdiction(unit)) return;
         }
 
-        // (C) Пересчёт коридора при расширении KEU ИЛИ если только что достигли (и обнулили) shelter.
-        if (newKEUIDs.length === oldKEUIDs.length && !reachedShelter) { _redrawRoutOverlay(unit); return; }
+        if (_checkReachedShelter(unit, targetHex)) return;
 
-        const newCostsFromCurrent = Rules.calc_hex_to_every_hex_dist_map(unit.hex, keuUnits, unit.mf);   // forward от новой позиции с новым KEU и остатком MF
-        State.setUnit(unit.id, 'hexToHexesCostsMap', newCostsFromCurrent);
-
-        if (unit.chosenShelter && newCostsFromCurrent.has(`${unit.chosenShelter.col},${unit.chosenShelter.row}`)) {
-            _buildCorridor(unit, unit.chosenShelter, keuUnits, unit.mf, newCostsFromCurrent);
-        } else {
-            const newShelters = Rules.pickNearestShelters(newCostsFromCurrent);   // destination потерян → ищем новый nearest
-            State.setUnit(unit.id, 'shelterHexes', newShelters);
-            _clearCorridor(unit);
-            console.log(`[RtPh] ${unit.id} destination lost → ${newShelters.length ? `pick new (${newShelters.length})` : 'free-rout'}`);
-        }
-
+        _recomputeCorridor(unit);
         _redrawRoutOverlay(unit);
     },
 
-    EndRout: () => {
+    EscortWithLeader: (ctx) => {
+        const leaderId = ctx.unitId;
+        const routerId = State.routingUnit;
+        const current = State.units[leaderId].escortingRouter;
+        if (current === routerId) {
+            State.setUnit(leaderId, 'escortingRouter', null);
+            console.log(`[RtPh] leader ${leaderId} escort cancelled`);
+        } else {
+            State.setUnit(leaderId, 'escortingRouter', routerId);
+            console.log(`[RtPh] leader ${leaderId} escorts ${routerId}`);
+        }
+    },
+
+    ArmLowCrawl: () => {
+        State.pendingLowCrawl = true;
+        UIState.removeButton('LowCrawl');
+        console.log('[LowCrawl] armed — click a destination hex (1 hex, all MF, no interdiction)');
+    },
+
+    EndRout: async () => {
         const unit = State.units[State.routingUnit];
         if (!unit) return;
 
@@ -231,14 +219,14 @@ const handlers = {
         const adjacentEnemy = _adjacentUnbrokenEnemy(unit);
         if (adjacentEnemy) {
             console.log(`[RtPh] ${unit.id} eliminated: ends adjacent to unbroken ${adjacentEnemy.id}`);
-            _remove_unit(unit.id);
+            await _eliminateWithKIA(unit.id);
             _finalizeRoutState();
             return;
         }
         // Eliminate: обязан был раутиться, но не двинулся ни разу.
         if (unit.mustRout) {
             console.log(`[RtPh] ${unit.id} eliminated: failed to rout (never moved)`);
-            _remove_unit(unit.id);
+            await _eliminateWithKIA(unit.id);
             _finalizeRoutState();
             return;
         }
@@ -309,12 +297,15 @@ const handlers = {
                 if (u.routMinCostToShelter)  State.setUnit(u.id, 'routMinCostToShelter', null);
                 if (u.routComputed)          State.setUnit(u.id, 'routComputed', false);
                 if (u.inRouting)             State.setUnit(u.id, 'inRouting', false);
+                if (u.escortingRouter)       State.setUnit(u.id, 'escortingRouter', null);
             }
             State.routingUnit = null;
+            State.pendingLowCrawl = false;
             UIState.setRoutLegalHexes([]);
             UIState.setRoutShelters([]);
             UIState.setRoutPathHexes([]);
             UIState.removeButton('EndRout');
+            UIState.removeButton('LowCrawl');
             console.log('[RtPh end] cleared all rout state');
         }
     },
@@ -429,6 +420,149 @@ const handlers = {
 // Общий пайплайн огня для всех фаз (MPh DFF, PFPh prep, DFPh Final Fire).
 // Structure: сначала формируем sub-FGs + рисуем LoS-визуал; затем switch по фазе
 // с pre-checks и loop по sub-FG (у каждой фазы свой target getter и пост-обработка).
+function _isOpenGround(hex) {
+    return terrainAt(hex.col, hex.row).length === 0;
+}
+
+// Определяет "shooter hex" (для weapons = hex possessor'а) и "disabled" (не может стрелять).
+// Возвращает null если entity вообще не может быть interdictor'ом (weapon на земле).
+function _getShooterInfo(u) {
+    if (u.category === 'carried') {
+        if (!u.possessorId) return null;
+        const p = State.units[u.possessorId];
+        return { hex: p.hex, disabled: p.broken || p.pinned || p.exhausted || u.broken };
+    }
+    return { hex: u.hex, disabled: u.broken || u.pinned || u.exhausted };
+}
+
+function _findInterdictor(unit) {
+    for (const interdictor of Object.values(State.units)) {
+        if (interdictor.side === unit.side) continue;
+        const info = _getShooterInfo(interdictor);
+        if (!info || info.disabled) continue;
+        if (interdictor.type === 'leader') continue;                            // solo leader — skip (пока)
+        if (!interdictor.firepower || interdictor.firepower <= 0) continue;
+        if (hexDistance(info.hex, unit.hex) > interdictor.range) continue;      // normal range
+        if (!Rules.checkLOS(info.hex, unit.hex, State.orchardInSeason)) continue;
+        if (Rules.checkHindrance([info.hex], unit.hex) > 0) continue;           // unhindered LoS
+        return interdictor;
+    }
+    return null;
+}
+
+// Прогоняет Interdiction NMC. Возвращает true если раут этого юнита закончен
+// (eliminated или pinned — ждём EndRout от игрока для pin, авто-завершаем для elim).
+async function _handleInterdiction(unit) {
+    const interdictor = _findInterdictor(unit);
+    if (!interdictor) return false;
+
+    await sleep(300);   // ждём завершения Konva-tween'а мува (0.3s) — иначе юнит "рвётся" при elim
+
+    const escort = Object.values(State.units).find(u => u.escortingRouter === unit.id);
+    console.log(`[Interdiction] ${unit.id} by ${interdictor.id}${escort ? ` (escorted by ${escort.id})` : ''}`);
+    const outcome = Rules.interdictionAttack(unit, escort);
+    if (outcome === 'ok') return false;
+
+    if (outcome === 'eliminated') {
+        await _eliminateWithKIA(unit.id);
+        if (escort) await _eliminateWithKIA(escort.id);   // leader разделяет судьбу — eliminated
+        _finalizeRoutState();
+        return true;
+    }
+    if (outcome === 'pinned') {
+        State.setUnit(unit.id, 'pinned', true);
+        _clearCorridor(unit);
+        _clearRoutOverlay();
+        console.log(`[Interdiction] ${unit.id} pinned → rout stops, click EndRout`);
+        return true;
+    }
+    if (outcome === 'reduced') _replace_unit(unit.id, unit.halfSquad, unit.id);   // squad → HS, раут продолжается
+    if (outcome === 'wounded') State.setUnit(unit.id, 'wounded', true);           // leader wound (мутации уже в _woundLeader)
+    return false;
+}
+
+// Легален ли клик как rout-move: adjacent + KEU-правило + (если коридор) в коридоре.
+function isLegalRoutStep(unit, targetHex) {
+    if (!isAdjacent(unit.hex, targetHex)) return false;
+    const keuUnits = unit.keuIDsList.map(id => State.units[id]);
+    if (!Rules.check_KEU_range_and_adjacency(unit.hex, targetHex, keuUnits)) return false;
+    if (unit.routPathHexes && !unit.routPathHexes.has(`${targetHex.col},${targetHex.row}`)) return false;
+    return true;
+}
+
+// State mutations. MF-check уже пройден в handler'е. path не обновляем — в RtPh не используется.
+// Ветвление обычный rout / LowCrawl: LC тратит весь MF, ставит usedLowCrawl (skip interdiction).
+function _applyRoutMove(unit, targetHex, isWoodsRoad) {
+    if (State.pendingLowCrawl) {
+        State.setUnit(unit.id, 'mf', 0);
+        State.setUnit(unit.id, 'usedLowCrawl', true);
+        console.log(`[LowCrawl] ${unit.id} → (${targetHex.col},${targetHex.row}), MF exhausted`);
+    } else {
+        const cost = Rules.checkCost(targetHex, unit.hex, isWoodsRoad ? 'forest' : null);
+        State.setUnit(unit.id, 'mf', unit.mf - cost);
+        UIState.removeButton('LowCrawl');   // после обычного хода LC больше недоступен
+        console.log(`[RtPh] ${unit.id} → (${targetHex.col},${targetHex.row}), MF=${unit.mf - cost}`);
+    }
+    State.setUnit(unit.id, 'hex', targetHex);
+    if (isWoodsRoad) State.setUnit(unit.id, 'usedWoodsRoad', true);
+    State.setUnit(unit.id, 'mustRout', false);   // обязанность двинуться выполнена
+
+    // Escort leader (если есть) — движется вместе с router'ом.
+    const escort = Object.values(State.units).find(u => u.escortingRouter === unit.id);
+    if (escort) {
+        State.setUnit(escort.id, 'hex', targetHex);
+        console.log(`[RtPh] escort ${escort.id} → (${targetHex.col},${targetHex.row})`);
+    }
+}
+
+// Обновляет KEU-список (новые observers). Мутирует юнит если изменилось.
+function _updateRoutKEU(unit) {
+    const oldKEUIDs = unit.keuIDsList;
+    const newKEUIDs = _updateKEUList(unit, oldKEUIDs);
+    if (newKEUIDs.length === oldKEUIDs.length) return;
+    State.setUnit(unit.id, 'keuIDsList', newKEUIDs);
+    console.log(`[RtPh] ${unit.id} new KEU: [${newKEUIDs.filter(id => !oldKEUIDs.includes(id)).join(',')}]`);
+}
+
+// Если дошли до chosenShelter — safe finalize (не adjacent) или сброс destination.
+// Возвращает true если раут завершён (ранний return из handler'а).
+function _checkReachedShelter(unit, targetHex) {
+    if (!unit.chosenShelter || !isSameHex(unit.chosenShelter, targetHex)) return false;
+    if (!_adjacentUnbrokenEnemy(unit)) { _finalizeRout(unit); return true; }
+    _clearCorridor(unit);
+    console.log(`[RtPh] ${unit.id} at shelter but adjacent to enemy → find new destination`);
+    return false;
+}
+
+// Пересчитывает коридор от текущей позиции с текущим MF.
+// Держит старый chosenShelter если ещё достижим, иначе показывает новые nearest.
+function _recomputeCorridor(unit) {
+    const keuUnits = unit.keuIDsList.map(id => State.units[id]);
+    const newCosts = Rules.calc_hex_to_every_hex_dist_map(unit.hex, keuUnits, unit.mf);
+    State.setUnit(unit.id, 'hexToHexesCostsMap', newCosts);
+
+    if (unit.chosenShelter && newCosts.has(`${unit.chosenShelter.col},${unit.chosenShelter.row}`)) {
+        _buildCorridor(unit, unit.chosenShelter, keuUnits, unit.mf, newCosts);
+    } else {
+        let newShelters = Rules.pickNearestShelters(newCosts, unit.id, State.units);   // обычный nearest — как было
+        const nearestKEUDist = Math.min(...keuUnits.map(k => hexDistance(unit.hex, k.hex)));   // расстояние до ближайшего KEU (в гексах)
+        if (newShelters.length && !newShelters.some(s => hexDistance(unit.hex, s) > nearestKEUDist)) {   // если ни один nearest не дальше чем KEU
+            const further = Rules.pickNearestShelters(newCosts, unit.id, State.units, unit.hex, nearestKEUDist);   // ищем следующий MF-tier строго дальше KEU
+            newShelters = [...newShelters, ...further];   // добавляем к nearest
+        }
+        State.setUnit(unit.id, 'shelterHexes', newShelters);
+        _clearCorridor(unit);
+        console.log(`[RtPh] ${unit.id} destination lost → ${newShelters.length ? `pick new (${newShelters.length})` : 'free-rout'}`);
+    }
+}
+
+// Гасит все rout overlays (shelters/corridor/legal-adjacent).
+function _clearRoutOverlay() {
+    UIState.setRoutShelters([]);
+    UIState.setRoutPathHexes([]);
+    UIState.setRoutLegalHexes([]);
+}
+
 // -----------------------------------------------------------------------------
 // Обновляет KEU-список router'а: добавляет enemy, которые теперь в LoS к его hex'у.
 // По правилу список только растёт ("nor may it move towards such a unit after
@@ -454,6 +588,10 @@ function _updateKEUList(unit, existingKEUIDs) {
 //   3. shelter'ов нет → free-rout mode, легальные adjacent (зелёные)
 // -----------------------------------------------------------------------------
 function _redrawRoutOverlay(unit) {
+    if (unit.mf === 0) {   // ничего двинуть нельзя — гасим все hex-подсветки
+        _clearRoutOverlay();
+        return;
+    }
     if (unit.chosenShelter && unit.routPathHexes) {
         UIState.setRoutShelters([unit.chosenShelter]);
         UIState.setRoutPathHexes([...unit.routPathHexes].map(k => {
@@ -480,6 +618,7 @@ function _buildCorridor(unit, chosenShelter, keuUnits, budget, costsFromCurrent)
     const costsToShelter = Rules.calc_hex_to_every_hex_dist_map(chosenShelter, keuUnits, budget, true);
     const corridor = new Set();
     costsFromCurrent.forEach((costFromUnit, key) => {
+        if (costFromUnit === 0) return;   // сам хекс юнита — не destination
         const costToShelter = costsToShelter.get(key);
         if (costToShelter != null && costFromUnit + costToShelter <= budget) corridor.add(key);
     });
@@ -505,6 +644,13 @@ function _adjacentUnbrokenEnemy(unit) {
     ) || null;
 }
 
+// Показывает KIA-визуал на юните, ждёт немного, затем удаляет.
+async function _eliminateWithKIA(id) {
+    State.setUnit(id, 'kia', true);
+    await sleep(700);
+    _remove_unit(id);
+}
+
 // Финализация раута для одного юнита (safe): очистка полей + overlay + кнопки.
 function _finalizeRout(unit) {
     State.setUnit(unit.id, 'inRouting', false);
@@ -512,15 +658,18 @@ function _finalizeRout(unit) {
     State.setUnit(unit.id, 'hexToHexesCostsMap', null);
     _clearCorridor(unit);
     State.setUnit(unit.id, 'routComputed', false);
+    // Сбросить escort у любого leader'а, который сопровождал этого router'а.
+    const escort = Object.values(State.units).find(u => u.escortingRouter === unit.id);
+    if (escort) State.setUnit(escort.id, 'escortingRouter', null);
     _finalizeRoutState();
 }
 
 // Общая очистка глобального rout-state + overlay + кнопки.
 function _finalizeRoutState() {
-    UIState.setRoutShelters([]);
-    UIState.setRoutPathHexes([]);
-    UIState.setRoutLegalHexes([]);
+    _clearRoutOverlay();
     UIState.removeButton('EndRout');
+    UIState.removeButton('LowCrawl');
+    State.pendingLowCrawl = false;
     State.routingUnit = null;
 }
 
@@ -868,10 +1017,9 @@ function _replace_unit(oldId, newTemplateId, newId) {
 // применить changes от fireAttack: { unitId: 'broken'|'pinned'|'eliminated'|'reduced'|'wounded' }
 async function _apply_changes_for_targets(changes) {
     for (const [id, state] of Object.entries(changes)) {
-        // eliminated — юнит уничтожается физически
+        // eliminated — юнит уничтожается физически (KIA-визуал + пауза + remove)
         if (state === 'eliminated') {
-            _remove_unit(id);
-            await sleep(300);
+            await _eliminateWithKIA(id);
             continue;
         }
         // reduced — squad заменяется на свой half-squad
