@@ -30,7 +30,10 @@ const Infantry         = { ...Unit, category: 'infantry',
                                     routComputed: false,     // флаг: SelectRouter уже отработал
                                     usedLowCrawl: false,     // ставится handler'ом LowCrawl (для F пока всегда false)
                                     kia: false,              // временный "KIA" визуал перед удалением юнита
-                                    escortingRouter: null }; // id router'а которого сопровождает (для leader'а)
+                                    escortingRouter: null,   // id router'а которого сопровождает (для leader'а)
+                                    selectedForAdvance: false, // выделен для advance-хода (APh)
+                                    ccSelected: false,         // выделен в CC-панели (CCPh)
+                                    inMelee: false };          // Melee — CC не разрешён, гекс остаётся CC-hex
 const Squad            = { ...Infantry, type: 'squad', mf: 4, leaderBonus: 2, firingStatus: ' ', ipc: 3 };   // MMC
 const Leader           = { ...Infantry, type: 'leader', mf: 6, quality: 'Elite', ipc: 1 };                    // SMC
 const GermanSquad_1st   = { ...Squad,  nation: 'german',   quality: '1stLine', selfRally: true  };
@@ -101,6 +104,9 @@ const TEMPLATES = {
   'ru_LMG': { ...MG, nation: 'soviet', firepower: 2, range: 6, mgClass: 'LMG',
               breakdownNumber: 11, rof: 1, repairNumber: 2, portagePoints: 1,
               src: './graf/ruLMG.gif', brokenSrc: './graf/ruLMGb.gif' },
+  'ru_HMG': { ...MG, nation: 'soviet', firepower: 6, range: 12, mgClass: 'HMG',
+              breakdownNumber: 12, rof: 3, repairNumber: 3, portagePoints: 5,
+              src: './graf/ruHMG.gif', brokenSrc: './graf/ruHMGb.gif' },
   'ge_HMG': { ...MG, nation: 'german', firepower: 7, range: 16, mgClass: 'HMG',
               breakdownNumber: 12, rof: 3, repairNumber: 3, portagePoints: 4,
               src: './graf/geHMG.gif', brokenSrc: './graf/geHMGb.gif' },
@@ -391,6 +397,7 @@ export async function createAndLoadUnits(layer, scenarioUnits) {
             side: record.side,   // 'attacker' | 'defender' — из сценария
             hex: resolvedHex,
             path: [{ hex: resolvedHex, isRoad: Rules._isRoadHex(resolvedHex) }],
+            baseMF: tmpl.mf,     // сохраняем template MF для reset между фазами
             ...(record.state || {}),   // scenario-level overrides (broken, desperationMorale, cx, ...)
         };
         if (record.possessorId) template.possessorId = record.possessorId;
@@ -429,7 +436,8 @@ export async function createAndLoadUnits(layer, scenarioUnits) {
 // Создать юнит из шаблона в указанном гексе — для замены на HS и т.п.
 export async function spawn_unit(templateId, id, hex, layer, side = null) {
     const template = { ...TEMPLATES[templateId], id, hex, side,
-                       path: [{ hex, isRoad: Rules._isRoadHex(hex) }] };
+                       path: [{ hex, isRoad: Rules._isRoadHex(hex) }],
+                       baseMF: TEMPLATES[templateId].mf };
     template.elr   = template.lowerQuality ? (State.elr[template.nation] ?? 3) : 20;
     const image    = await loadImage(template.src);
     const { x, y } = hexToPixel(hex.col, hex.row);

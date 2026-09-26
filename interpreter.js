@@ -10,19 +10,21 @@ function createContext(e) {
     const buttonLabel = e.target.getParent()?.getAttr('buttonLabel'); // label кнопки UI (атрибут на группе)
     const button      = e.evt.button;                                 // кнопка мыши: 0=left, 2=right
     const shiftKey    = e.evt.shiftKey;                               // зажат ли шифт
+    // ccPanel — клик по юниту в CC-панели (uiLayer), а не по юниту на поле.
+    const ccPanel     = e.target.getParent()?.getAttr('ccPanel') === true;
     // мировые координаты клика (учитываем сдвиг stage от скроллинга WASD)
     const stage       = e.target.getStage();
     const raw         = stage.getPointerPosition();
     const pos         = { x: raw.x - stage.x(), y: raw.y - stage.y() };
 
-    return { unitId, buttonLabel, button, shiftKey, pos };
+    return { unitId, buttonLabel, button, shiftKey, pos, ccPanel };
 }
 
 // ---------------------------------------------------------------------------
 // Проверка одной группы — все условия должны пройти (AND)
 // ---------------------------------------------------------------------------
 function checkGroup(group, ctx, cmd) {
-  for (const [name, check] of Object.entries(group)) {
+  for (const [name, check] of Object.entries(group)) { // Ключ: name, Значение: check
     if (!check(ctx)) {
       return false;
     }
@@ -327,6 +329,82 @@ const RULES = [
             },
         }],
         name: 'RoutMove'
+    },
+    // APh: клик по attacker юниту → toggle select для advance (engine делает проверки eligibility).
+    {
+        requiresAny: [{
+            phaseIsAdvance: ()  => PhaseManager.getPhase() === 'advance',
+            leftClick:      ctx => ctx.button !== 2,
+            hasUnit:        ctx => ctx.unitId !== undefined,
+            ownSide:        ctx => State.units[ctx.unitId].side === 'attacker',
+        }],
+        name: 'SelectForAdvance'
+    },
+    // APh: клик по hex'у (когда есть selected) → advance туда.
+    {
+        requiresAny: [{
+            phaseIsAdvance: ()  => PhaseManager.getPhase() === 'advance',
+            leftClick:      ctx => ctx.button !== 2,
+            hasSelected:    ()  => State.advanceSelected !== null,
+        }],
+        name: 'Advance'
+    },
+    // CCPh: клик на CC-хекс (красный) → выбрать его для разрешения.
+    {
+        requiresAny: [{
+            phaseIsCC:    ()  => PhaseManager.getPhase() === 'closeCombat',
+            leftClick:    ctx => ctx.button !== 2,
+            notPanel:     ctx => !ctx.ccPanel,
+            notUnit:      ctx => ctx.unitId === undefined,   // клик по пустому хексу, не по юниту
+            notButton:    ctx => ctx.buttonLabel === undefined,
+        }],
+        name: 'SelectCCHex'
+    },
+    // CCPh: клик по юниту в CC-панели → toggle selection.
+    {
+        requiresAny: [{
+            phaseIsCC:    ()  => PhaseManager.getPhase() === 'closeCombat',
+            leftClick:    ctx => ctx.button !== 2,
+            ccPanel:      ctx => ctx.ccPanel,
+            hasUnit:      ctx => ctx.unitId !== undefined,
+        }],
+        name: 'CCToggleUnit'
+    },
+    // CCPh: кнопка ConfirmCCAttack → зафиксировать текущий выбор как одну атаку.
+    {
+        requiresAny: [{
+            phaseIsCC:  ()  => PhaseManager.getPhase() === 'closeCombat',
+            leftClick:  ctx => ctx.button !== 2,
+            clickedBtn: ctx => ctx.buttonLabel === 'ConfirmCCAttack',
+        }],
+        name: 'ConfirmCCAttack'
+    },
+    // CCPh: кнопка StartDefenderCC → переключаем declare-фазу на defender.
+    {
+        requiresAny: [{
+            phaseIsCC:  ()  => PhaseManager.getPhase() === 'closeCombat',
+            leftClick:  ctx => ctx.button !== 2,
+            clickedBtn: ctx => ctx.buttonLabel === 'StartDefenderCC',
+        }],
+        name: 'StartDefenderCC'
+    },
+    // CCPh: кнопка ResolveCC → расчёт всех атак + apply simultaneous.
+    {
+        requiresAny: [{
+            phaseIsCC:  ()  => PhaseManager.getPhase() === 'closeCombat',
+            leftClick:  ctx => ctx.button !== 2,
+            clickedBtn: ctx => ctx.buttonLabel === 'ResolveCC',
+        }],
+        name: 'ResolveCC'
+    },
+    // CCPh: кнопка RollAmbush → проверка засады перед объявлением атак.
+    {
+        requiresAny: [{
+            phaseIsCC:  ()  => PhaseManager.getPhase() === 'closeCombat',
+            leftClick:  ctx => ctx.button !== 2,
+            clickedBtn: ctx => ctx.buttonLabel === 'RollAmbush',
+        }],
+        name: 'RollAmbush'
     },
 
 ]

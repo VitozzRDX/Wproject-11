@@ -96,6 +96,7 @@ async function drawCardVisuals(layer, cardVisuals) {
 // Слои сцены (background + units) пересоздаются при loadScenario.
 // UI-слой (uiLayer) — persistent, живёт всю жизнь приложения.
 let backgroundLayer = null;
+let ccLayer = null;         // world-anchored, ПОД юнитами: CC-хекс подсветка
 let unitLayer = null;
 let uiLayer = null;         // screen-fixed: кнопки + крутилка
 let worldFxLayer = null;    // world-anchored: LoS, residual, smoke, hit points
@@ -129,13 +130,15 @@ async function loadScenario(name) {
 
     // 3. Destroy layers сцены
     backgroundLayer?.destroy();
+    ccLayer?.destroy();
     unitLayer?.destroy();
     backgroundLayer = null;
+    ccLayer = null;
     unitLayer = null;
 
     // 4. Параметры сценария
     State.orchardInSeason = scen.orchardInSeason;
-    PhaseManager.setPhase('rout');
+    PhaseManager.setPhase('rally');
 
     // 5. Пиксельные наборы + hexmap
     await initTerrainLOS(scen.pixelsUrl, scen.roadsUrl);
@@ -148,13 +151,18 @@ async function loadScenario(name) {
     stage.add(backgroundLayer);
     backgroundLayer.moveToBottom();
 
-    // 7. Юниты + первичное позиционирование (State.addUnit не триггерит subscribers,
+    // 7. CC layer — под юнитами, для CC-хекс подсветки (RtPh-подсветки идут в worldFxLayer, выше юнитов).
+    ccLayer = new Konva.Layer();
+    stage.add(ccLayer);
+
+    // 8. Юниты + первичное позиционирование (State.addUnit не триггерит subscribers,
     // поэтому проходим по уникальным хексам и вручную вызываем recalculateHex)
     unitLayer = new Konva.Layer();
     await unitloading.createAndLoadUnits(unitLayer, scen.units);
     stage.add(unitLayer);
     worldFxLayer.moveToTop();   // эффекты (LoS, residual, smoke) над юнитами
     uiLayer.moveToTop();        // UI (кнопки, крутилка) поверх всего
+    RendererUI.setCCLayer(ccLayer);   // передать актуальный ccLayer в rendererUI (пересоздаётся при loadScenario)
     const uniqueHexes = new Set();
     Object.values(State.units).forEach(u => {
         if (u.hex) uniqueHexes.add(`${u.hex.col},${u.hex.row}`);

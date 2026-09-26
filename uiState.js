@@ -60,4 +60,20 @@ export const UIState = {
     setRoutPathHexes(hexes) {
         this.subscribers.forEach(sub => sub('setRoutPathHexes', null, { hexes }));
     },
+
+    setCCHexes(hexes) {
+        this.subscribers.forEach(sub => sub('setCCHexes', null, { hexes }));
+    },
+
+    showCCPanel(units) {
+        this.subscribers.forEach(sub => sub('showCCPanel', null, { units }));
+    },
+
+    hideCCPanel() {
+        this.subscribers.forEach(sub => sub('hideCCPanel', null, {}));
+    },
+
+    setCCPanelSelect(selectedIds) {
+        this.subscribers.forEach(sub => sub('setCCPanelSelect', null, { selectedIds }));
+    },
 }

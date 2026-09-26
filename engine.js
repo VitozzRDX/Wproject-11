@@ -234,6 +234,155 @@ const handlers = {
         _finalizeRout(unit);
     },
 
+    SelectCCHex: (ctx) => {
+        const hex = pixelToHex(ctx.pos.x, ctx.pos.y);
+        if (!State.ccHexes.some(h => isSameHex(h, hex))) return;
+        // Уже Melee-hex (разрешён в этой CCPh) → повторный клик игнорируем.
+        const alreadyMelee = Object.values(State.units).some(u =>
+            u.category === 'infantry' && isSameHex(u.hex, hex) && u.inMelee
+        );
+        if (alreadyMelee) return;
+        State.currentCCHex = hex;
+        State.ccSelectedIds = [];
+        State.ccAttackerAttackers = [];
+        State.ccAttackerDefenders = [];
+        State.ccAttackerList = [];
+        State.ccDefenderAttackers = [];
+        State.ccDefenderDefenders = [];
+        State.ccDefenderList = [];
+        State.ccDefenderDeclaring = false;
+        const units = Object.values(State.units).filter(u =>
+            u.category === 'infantry' && isSameHex(u.hex, hex)
+        );
+        UIState.showCCPanel(units);
+        UIState.addButton('ConfirmCCAttack', { x: 20, y: 100, label: 'ConfirmCCAttack' });
+        UIState.addButton('StartDefenderCC', { x: 20, y: 140, label: 'StartDefenderCC' });
+        State.ambushSide = null;
+        State.ccAmbushRound = null;
+        // Ambush eligible: woods/building hex, и никто из юнитов не в Melee (Melee = reinforcing, не ambush).
+        const anyInMelee = Object.values(State.units).some(u =>
+            u.category === 'infantry' && isSameHex(u.hex, hex) && u.inMelee
+        );
+        if (Rules.isAmbushEligibleHex(hex) && !anyInMelee) {
+            UIState.addButton('RollAmbush', { x: 20, y: 220, label: 'RollAmbush' });
+        }
+        console.log(`[CCPh] selected hex (${hex.col},${hex.row}), units=${units.length}`);
+    },
+
+    RollAmbush: () => {
+        State.ambushSide = Rules.rollAmbush(State.currentCCHex, State.units);
+        console.log(`[Ambush] result: ${State.ambushSide ?? 'none'}`);
+        UIState.removeButton('RollAmbush');
+        if (!State.ambushSide) return;   // нет успеха → обычный флоу
+        // Ambush-режим: убираем StartDefenderCC (раунды сам переключит ResolveCC).
+        UIState.removeButton('StartDefenderCC');
+        State.ccAmbushRound = 'round 1';
+        State.ccDefenderDeclaring = (State.ambushSide === 'defender');
+        State.ccSelectedIds = [];
+        UIState.addButton('ResolveCC', { x: 20, y: 180, label: 'ResolveCC' });
+        console.log(`[Ambush] ${State.ambushSide} declares first`);
+    },
+
+    CCToggleUnit: (ctx) => {
+        const uid = ctx.unitId;
+        if (State.ccSelectedIds.includes(uid)) return;   // уже был выбран
+        const u = State.units[uid];
+        switch (State.ccDefenderDeclaring) {
+            case false:   // AttackerDeclaring
+                if (u.side === 'attacker') State.ccAttackerAttackers.push(uid);
+                else                       State.ccAttackerDefenders.push(uid);
+                break;
+            case true:    // DefenderDeclaring
+                if (u.side === 'defender') State.ccDefenderAttackers.push(uid);
+                else                       State.ccDefenderDefenders.push(uid);
+                break;
+        }
+        State.ccSelectedIds.push(uid);
+        State.setUnit(uid, 'ccSelected', true);
+        UIState.setCCPanelSelect(_allCurrentSelected());
+    },
+
+    ConfirmCCAttack: () => {
+        const confirmed = State.ccDefenderDeclaring
+            ? _confirmAttackFromPools(State.ccDefenderAttackers, State.ccDefenderDefenders, State.ccDefenderList)
+            : _confirmAttackFromPools(State.ccAttackerAttackers, State.ccAttackerDefenders, State.ccAttackerList);
+        if (!confirmed) return;
+
+        for (const uid of [...confirmed.attackers, ...confirmed.targets]) {
+            State.setUnit(uid, 'ccSelected', false);
+        }
+        UIState.setCCPanelSelect([]);
+        console.log('[CCPh] atk:', State.ccAttackerList.map(a => `[${a.attackers}]→[${a.targets}]`).join(' | '),
+                    '| def:', State.ccDefenderList.map(a => `[${a.attackers}]→[${a.targets}]`).join(' | '));
+    },
+
+    StartDefenderCC: () => {
+        State.ccDefenderDeclaring = true;
+        State.ccSelectedIds = [];   // новая declare-фаза → новое tracking
+        UIState.removeButton('StartDefenderCC');
+        UIState.addButton('ResolveCC', { x: 20, y: 180, label: 'ResolveCC' });
+        console.log('[CCPh] defender declares');
+    },
+
+    ResolveCC: async () => {
+        if (State.ccAmbushRound) await _resolveAmbushRound();
+        else                     await _result_of_CC_in_hex();
+    },
+
+    SelectForAdvance: (ctx) => {
+        let uid = ctx.unitId;
+        let u = State.units[uid];
+        // Клик на weapon → берём его possessor'а.
+        if (u.category === 'carried' && u.possessorId) { uid = u.possessorId; u = State.units[uid]; }
+        if (u.category !== 'infantry') return;   // только Infantry
+        if (u.broken || u.pinned) return;         // только Good Order unpinned
+
+        // Toggle
+        if (State.advanceSelected === uid) {
+            State.advanceSelected = null;
+            State.setUnit(uid, 'selectedForAdvance', false);
+            return;
+        }
+        if (State.advanceSelected) State.setUnit(State.advanceSelected, 'selectedForAdvance', false);
+        State.advanceSelected = uid;
+        State.setUnit(uid, 'selectedForAdvance', true);
+        console.log(`[APh] selected ${uid}`);
+    },
+
+    Advance: (ctx) => {
+        const uid = State.advanceSelected;
+        if (!uid) return;
+        const unit = State.units[uid];
+        const targetHex = pixelToHex(ctx.pos.x, ctx.pos.y);
+        if (!isAdjacent(unit.hex, targetHex)) return;
+
+        const isWoodsRoad = Rules._hasWoodsRoad(targetHex);
+        const cost = Rules.checkCost(targetHex, unit.hex, isWoodsRoad ? 'dirtRoad' : null);   // Woods-Road автоматически как road (1 MF)
+        const effectiveMF = unit.mf - Rules._portageExcess(unit, State.units, [uid]);          // MF за вычетом portage excess
+
+        if (cost > effectiveMF) { console.log(`[APh] ${uid}: cost ${cost} > mf ${effectiveMF}`); return; }
+        if (cost === effectiveMF && unit.exhausted) {
+            console.log(`[APh] ${uid}: CX не может advance в hex стоящий все MF`);
+            return;
+        }
+        if (cost === effectiveMF) {
+            State.setUnit(uid, 'exhausted', true);   // cost === mf → становимся CX
+            console.log(`[APh] ${uid} становится CX`);
+        }
+
+        State.setUnit(uid, 'hex', targetHex);
+        // Possessed weapons едут с possessor'ом.
+        Object.values(State.units).forEach(w => {
+            if (w.category === 'carried' && w.possessorId === uid) {
+                State.setUnit(w.id, 'hex', targetHex);
+            }
+        });
+        State.setUnit(uid, 'selectedForAdvance', false);
+        State.advanceSelected = null;
+        console.log(`[APh] ${uid} advanced to (${targetHex.col},${targetHex.row})`);
+        _markCCHexIfEnemyPresent(unit, targetHex);
+    },
+
     NextPhase: () => {
         const prevPhase = PhaseManager.getPhase();
         const p = PhaseManager.next();
@@ -274,6 +423,52 @@ const handlers = {
         //   shelterHexes — потенциальные укрытия (woods/building) в радиусе 6, не хуже старта.
         // Вход в RtPh: пометить обязанных раутиться + кэш стартового KEU-списка.
         // Shelter'ы и коридор НЕ считаем — это делается при SelectRouter.
+        // Вход в CCPh — просто перерисовать список CC-хексов (собран Advance handler'ом).
+        if (p === 'closeCombat') {
+            UIState.setCCHexes(State.ccHexes ?? []);
+            console.log(`[CCPh] ${(State.ccHexes ?? []).length} CC хексов`);
+        }
+        // Выход из CCPh — очистить.
+        if (prevPhase === 'closeCombat') {
+            for (const u of Object.values(State.units)) {
+                if (u.ccSelected) State.setUnit(u.id, 'ccSelected', false);
+            }
+            for (const u of Object.values(State.units)) {
+                if (u.ccSelected) State.setUnit(u.id, 'ccSelected', false);
+            }
+            State.ccHexes = [];
+            State.currentCCHex = null;
+            State.ccSelectedIds = [];
+            State.ccAttackerAttackers = [];
+            State.ccAttackerDefenders = [];
+            State.ccAttackerList = [];
+            State.ccDefenderAttackers = [];
+            State.ccDefenderDefenders = [];
+            State.ccDefenderList = [];
+            State.ccDefenderDeclaring = false;
+            State.ambushSide = null;
+            State.ccAmbushRound = null;
+            UIState.setCCHexes([]);
+            UIState.hideCCPanel();
+            UIState.removeButton('ConfirmCCAttack');
+            UIState.removeButton('StartDefenderCC');
+            UIState.removeButton('RollAmbush');
+            UIState.removeButton('ResolveCC');
+        }
+
+        // Вход в APh: сбросить MF для attacker Good Order Infantry (фаза даёт свежий MF).
+        if (p === 'advance') {
+            for (const u of Object.values(State.units)) {
+                if (u.category !== 'infantry') continue;
+                if (u.side !== 'attacker') continue;
+                if (u.broken) continue;
+                let mf = u.baseMF;
+                if (u.wounded && u.type === 'leader') mf = Math.min(mf, 3);
+                State.setUnit(u.id, 'mf', mf);
+            }
+            console.log('[APh] MF reset for attacker Good Order infantry');
+        }
+
         if (p === 'rout') {
             for (const u of Object.values(State.units)) {
                 if (Rules.mustRout(u, State.units, State.orchardInSeason)) {
@@ -307,6 +502,14 @@ const handlers = {
             UIState.removeButton('EndRout');
             UIState.removeButton('LowCrawl');
             console.log('[RtPh end] cleared all rout state');
+        }
+
+        // Выход из APh — сбросить selection.
+        if (prevPhase === 'advance') {
+            for (const u of Object.values(State.units)) {
+                if (u.selectedForAdvance) State.setUnit(u.id, 'selectedForAdvance', false);
+            }
+            State.advanceSelected = null;
         }
     },
     DoubleTime: () => {
@@ -424,6 +627,170 @@ function _isOpenGround(hex) {
     return terrainAt(hex.col, hex.row).length === 0;
 }
 
+function _allCurrentSelected() {
+    return State.ccDefenderDeclaring
+        ? [...State.ccDefenderAttackers, ...State.ccDefenderDefenders]
+        : [...State.ccAttackerAttackers, ...State.ccAttackerDefenders];
+}
+
+// Фиксирует одну CC-атаку: копирует attackers/targets в list, сбрасывает исходные пулы.
+// Возвращает подтверждённый объект (или null если пулы пусты).
+// FP юнита для CC: leader = 1, иначе firepower.
+function _ccUnitFP(u) {
+    return u.type === 'leader' ? 1 : (u.firepower || 0);
+}
+
+// Считает эффекты атак из list на их цели. Возвращает {uid: 'kia' | 'reduce'}.
+// side — сторона выполняющая атаки ('attacker'|'defender'), для ambush DRM.
+function _calc_effect_for_targets_CC(list, side) {
+    const result = {};
+    for (const group of list) {
+        const atkFP = group.attackers.reduce((s, id) => s + _ccUnitFP(State.units[id]), 0);
+        const defFP = group.targets.reduce((s, id) => s + _ccUnitFP(State.units[id]), 0);
+
+        // Leader DRM применяется только если в группе есть MMC (не solo-leader).
+        // Если лидеров несколько — берётся лучший (самый низкий leadershipModifier).
+        const hasMMC = group.attackers.some(id => State.units[id].type !== 'leader');
+        const leaders = group.attackers.map(id => State.units[id]).filter(u => u.type === 'leader');
+        let drm = (leaders.length && hasMMC)
+            ? Math.min(...leaders.map(l => l.leadershipModifier ?? 0))
+            : 0;
+        // Ambush DRM: ambusher −1 на свои атаки, ambushed +1 на свои атаки.
+        if (State.ambushSide === side)                          drm -= 1;
+        else if (State.ambushSide && State.ambushSide !== side) drm += 1;
+
+        const col     = Rules.ccOddsColumn(atkFP, defFP);
+        const killNum = Rules.ccKillNumber(col);
+        const dr      = Rules.roll2d6();
+        const finalDR = dr + drm;
+        const eff     = finalDR < killNum ? 'kia' : finalDR === killNum ? 'reduce' : 'miss';
+        console.log(`[CC] [${group.attackers}]→[${group.targets}]: FP ${atkFP}:${defFP} = ${col} (kill ${killNum}), DR=${dr}${drm ? `${drm>0?'+':''}${drm}` : ''}=${finalDR} → ${eff}`);
+
+        switch (eff) {
+            case 'kia':
+                for (const uid of group.targets) result[uid] = 'kia';
+                break;
+            case 'reduce': {
+                const uid = group.targets[Math.floor(Math.random() * group.targets.length)];
+                result[uid] = 'reduce';
+                break;
+            }
+            case 'miss':   /* nothing */   break;
+        }
+    }
+    return result;
+}
+
+// Применяет эффекты {uid: 'kia'|'reduce'} — eliminate или replace.
+async function _apply_effect_CC(effects) {
+    for (const [uid, eff] of Object.entries(effects)) {
+        if (eff === 'kia') {
+            await _eliminateWithKIA(uid);
+        } else if (eff === 'reduce') {
+            const u = State.units[uid];
+            if (u?.halfSquad) _replace_unit(uid, u.halfSquad, uid);
+            else await _eliminateWithKIA(uid);
+        }
+    }
+}
+
+// Резолвит CC в currentCCHex: считает эффекты обоих сторон, потом применяет simultaneous.
+async function _result_of_CC_in_hex() {
+    const effOnDefenders = _calc_effect_for_targets_CC(State.ccAttackerList, 'attacker');
+    const effOnAttackers = _calc_effect_for_targets_CC(State.ccDefenderList, 'defender');
+    await _apply_effect_CC(effOnDefenders);
+    await _apply_effect_CC(effOnAttackers);
+    _finalizeCCHex();
+}
+
+// Резолвит один раунд ambush-СС.
+async function _resolveAmbushRound() {
+    const hex = State.currentCCHex;   // текущий CC-гекс — понадобится для фильтра выживших и перерисовки панели
+
+    // Определить, чья сторона сейчас declaring, и взять её список подтверждённых атак.
+    const declaringSide = State.ccDefenderDeclaring ? 'defender' : 'attacker';
+    const list = declaringSide === 'attacker' ? State.ccAttackerList : State.ccDefenderList;
+
+    // Посчитать эффект её атак (с ambush DRM внутри) и применить — часть целей гибнет или reduce'ится.
+    const eff = _calc_effect_for_targets_CC(list, declaringSide);
+    await _apply_effect_CC(eff);
+
+    if (State.ccAmbushRound === 'round 1') {
+        // Первый раунд закончился. Проверяем, нужен ли второй.
+        // Берём "другую сторону" (не-ambusher) и её выживших пехотинцев в hex'е.
+        const otherSide = State.ambushSide === 'attacker' ? 'defender' : 'attacker';
+        const survivors = Object.values(State.units).filter(u =>
+            u.category === 'infantry' && isSameHex(u.hex, hex) && u.side === otherSide
+        );
+        // Если у противника ambusher'а никого не осталось — CC закончен.
+        if (!survivors.length) { _finalizeCCHex(); return; }
+
+        // Переходим в раунд 2. Флаг ccDefenderDeclaring выставляем так, чтобы CCToggleUnit
+        // роутил клики ambushed'а как нападающих, а ambusher'а — как цели. Список выбранных сбрасываем.
+        State.ccAmbushRound = 'round 2';
+        State.ccDefenderDeclaring = (otherSide === 'defender');
+        State.ccSelectedIds = [];
+
+        // Перерисовать CC-панель — мёртвых там уже не будет (State.units их удалил в apply).
+        UIState.showCCPanel(Object.values(State.units).filter(u =>
+            u.category === 'infantry' && isSameHex(u.hex, hex)
+        ));
+        console.log(`[Ambush] round 2: ${otherSide} declares`);
+    } else {
+        // Уже был раунд 2 → CC полностью разрешён.
+        _finalizeCCHex();
+    }
+}
+
+// Убирает currentCCHex из списка (или помечает Melee), гасит панель + кнопки.
+function _finalizeCCHex() {
+    const hex = State.currentCCHex;
+    if (Rules.check_if_both_sides_still_in_hex(hex, State.units)) {
+        for (const u of Object.values(State.units)) {
+            if (u.category === 'infantry' && isSameHex(u.hex, hex)) {
+                State.setUnit(u.id, 'inMelee', true);
+            }
+        }
+        console.log(`[CC] hex (${hex.col},${hex.row}) → Melee`);
+    } else {
+        State.ccHexes = State.ccHexes.filter(h => !isSameHex(h, hex)); // удаляем гекс из СС гексов
+        UIState.setCCHexes(State.ccHexes);
+        console.log(`[CC] hex (${hex.col},${hex.row}) resolved`);
+    }
+    State.currentCCHex = null;
+    State.ambushSide = null;
+    State.ccAmbushRound = null;
+    UIState.hideCCPanel();
+    UIState.removeButton('ConfirmCCAttack');
+    UIState.removeButton('StartDefenderCC');
+    UIState.removeButton('ResolveCC');
+    UIState.removeButton('RollAmbush');
+}
+
+function _confirmAttackFromPools(attackers, targets, list) {
+    if (!attackers.length || !targets.length) return null;
+    const confirmed = { attackers: [...attackers], targets: [...targets] };
+    list.push(confirmed);
+    attackers.length = 0;
+    targets.length = 0;
+    return confirmed;
+}
+
+// Помечает хекс как CC-hex если там есть enemy infantry (после Advance-хода).
+function _markCCHexIfEnemyPresent(unit, targetHex) {
+    const hasEnemyInfantry = Object.values(State.units).some(o =>
+        o.side !== unit.side && o.category === 'infantry' && isSameHex(o.hex, targetHex)
+    );
+    if (!hasEnemyInfantry) return;
+
+    State.ccHexes ??= [];
+    if (State.ccHexes.some(h => isSameHex(h, targetHex))) return;
+
+    State.ccHexes.push({ col: targetHex.col, row: targetHex.row });
+    // Не рисуем сейчас — подсветка только в CCPh (см. NextPhase 'closeCombat' entry).
+    console.log(`[APh→CC] ${unit.id} advanced into enemy hex — CC pending at (${targetHex.col},${targetHex.row})`);
+}
+
 // Определяет "shooter hex" (для weapons = hex possessor'а) и "disabled" (не может стрелять).
 // Возвращает null если entity вообще не может быть interdictor'ом (weapon на земле).
 function _getShooterInfo(u) {
@@ -499,9 +866,10 @@ function _applyRoutMove(unit, targetHex, isWoodsRoad) {
         console.log(`[LowCrawl] ${unit.id} → (${targetHex.col},${targetHex.row}), MF exhausted`);
     } else {
         const cost = Rules.checkCost(targetHex, unit.hex, isWoodsRoad ? 'forest' : null);
-        State.setUnit(unit.id, 'mf', unit.mf - cost);
+        const newMF = unit.mf - cost;
+        State.setUnit(unit.id, 'mf', newMF);
         UIState.removeButton('LowCrawl');   // после обычного хода LC больше недоступен
-        console.log(`[RtPh] ${unit.id} → (${targetHex.col},${targetHex.row}), MF=${unit.mf - cost}`);
+        console.log(`[RtPh] ${unit.id} → (${targetHex.col},${targetHex.row}), MF=${newMF}`);
     }
     State.setUnit(unit.id, 'hex', targetHex);
     if (isWoodsRoad) State.setUnit(unit.id, 'usedWoodsRoad', true);
@@ -972,10 +1340,22 @@ function _replace_unit(oldId, newTemplateId, newId) {
     if (!old) return;
 
     const inherit = {
-        broken:            old.broken,
-        desperationMorale: old.desperationMorale,
-        pinned:            old.pinned,
-        exhausted:         old.exhausted,
+        broken:                 old.broken,
+        desperationMorale:      old.desperationMorale,
+        pinned:                 old.pinned,
+        exhausted:              old.exhausted,
+        mf:                     old.mf,
+        // RtPh state — HS продолжает раут без потери контекста.
+        mustRout:               old.mustRout,
+        inRouting:              old.inRouting,
+        keuIDsList:             old.keuIDsList,
+        shelterHexes:           old.shelterHexes,
+        chosenShelter:          old.chosenShelter,
+        hexToHexesCostsMap:     old.hexToHexesCostsMap,
+        routPathHexes:          old.routPathHexes,
+        routMinCostToShelter:   old.routMinCostToShelter,
+        routComputed:           old.routComputed,
+        usedLowCrawl:           old.usedLowCrawl,
     };
 
     const hex   = old.hex;
@@ -995,7 +1375,7 @@ function _replace_unit(oldId, newTemplateId, newId) {
         _remove_unit(oldId);   // временно сбросит possessorId у weapons — восстановим ниже
         const newUnit = await spawn_unit(newTemplateId, newId, hex, layer, side);
         for (const [key, val] of Object.entries(inherit)) {
-            if (val) State.setUnit(newId, key, true);
+            State.setUnit(newId, key, val);
         }
         // Восстанавливаем possessorship weapons на новом юните
         for (const wid of inheritedWeapons) {

@@ -18,6 +18,19 @@ export const State = {
     orchardInSeason: true,             // апр-окт: orchard блокирует LoS между разными elevation
     routingUnit: null,                 // id юнита, выбранного для раута в RtPh
     pendingLowCrawl: false,            // нажата кнопка LowCrawl — следующий RoutMove работает по правилам LC
+    advanceSelected: null,             // id юнита выбранного для advance-хода (APh)
+    ccHexes: [],                       // хексы с CC-ситуациями (opposing infantry, populated от Advance handler)
+    currentCCHex: null,                // хекс, который сейчас разрешает attacker
+    ccSelectedIds: [],                 // накапливается через все Confirm'ы (сброс только на SelectCCHex/CCPh exit)
+    ccAttackerAttackers: [],           // pool: свои attacker-юниты для текущей атаки (attacker declare)
+    ccAttackerDefenders: [],           // pool: enemy targets для текущей атаки (attacker declare)
+    ccAttackerList: [],                // подтверждённые атаки attacker-стороны
+    ccDefenderAttackers: [],           // pool: свои defender-юниты (defender declare)
+    ccDefenderDefenders: [],           // pool: enemy targets (defender declare)
+    ccDefenderList: [],                // подтверждённые атаки defender-стороны
+    ccDefenderDeclaring: false,        // true когда StartDefenderCC нажат
+    ambushSide: null,                  // 'attacker' | 'defender' | null — сторона получившая ambush
+    ccAmbushRound: null,               // 'round 1' | 'round 2' | null — раунд ambush-резолва
 
     // массив подписчиков (Positioning, Renderer и т.д.)
     subscribers: [],

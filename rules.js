@@ -1038,6 +1038,97 @@ function pickNearestShelters(costsFromCurrent, routerId, units, unitHex = null, 
 // Interdiction NMC для broken routing unit. Escort leader (если есть) добавляет
 // свой leadershipModifier как DRM. Отличие от обычного broken MC: результат
 // "равно морали" (pin) прерывает раут — юнит остаётся стоять с pinned=true.
+// CCT: колонка → kill number (3.8 CCPh).
+const CCT = {
+    '<1:8':  0,
+    '1:8':   1,
+    '1:6':   2,
+    '1:4':   3,
+    '1:2':   4,
+    '1:1':   5,
+    '3:2':   6,
+    '2:1':   7,
+    '3:1':   8,
+    '4:1':   9,
+    '6:1':  10,
+    '8:1':  11,
+    '10:1': 12,
+    '>10:1': 13,
+};
+
+// Ratio atkFP/defFP → колонка CCT (округление вниз в пользу защитника).
+// Вызывается симметрично: attacker attack → (atkFP, defFP); defender attack → (defFP, atkFP).
+function ccOddsColumn(atkFP, defFP) {
+    if (defFP === 0) return '>10:1';
+    const r = atkFP / defFP;
+    if (r > 10)     return '>10:1';
+    if (r === 10)   return '10:1';
+    if (r >= 8)     return '8:1';
+    if (r >= 6)     return '6:1';
+    if (r >= 4)     return '4:1';
+    if (r >= 3)     return '3:1';
+    if (r >= 2)     return '2:1';
+    if (r >= 1.5)   return '3:2';
+    if (r >= 1)     return '1:1';
+    if (r >= 0.5)   return '1:2';
+    if (r >= 0.25)  return '1:4';
+    if (r >= 1/6)   return '1:6';
+    if (r >= 0.125) return '1:8';
+    return '<1:8';
+}
+
+// Kill number по CCT-колонке. finalDR < killNumber → eliminated; == → CR; > → miss.
+function ccKillNumber(column) {
+    return CCT[column];
+}
+
+// Ambush eligible: woods или building hex.
+function isAmbushEligibleHex(hex) {
+    const t = terrainAt(hex.col, hex.row);
+    return t.includes('forest') || t.includes('woodenBuilding') || t.includes('stoneBuilding') || t.includes('Woods-Road');
+}
+
+// DRM к ambush dr для одной стороны (юниты этой стороны в hex'e).
+// +1 CX, +1 pinned, +1 Inexperienced, + leadership drm (если leader не один в стороне).
+function calcAmbushDRM(sideUnits) {
+    let drm = 0;
+    if (sideUnits.some(u => u.exhausted)) drm += 1;
+    if (sideUnits.some(u => u.pinned))    drm += 1;
+    if (sideUnits.some(u => u.quality === 'Inexperienced')) drm += 1;
+    const leaders = sideUnits.filter(u => u.type === 'leader');
+    const hasMMC  = sideUnits.some(u => u.type !== 'leader');
+    if (leaders.length && hasMMC) {
+        drm += Math.min(...leaders.map(l => l.leadershipModifier ?? 0));
+    }
+    return drm;
+}
+
+// Прогон Ambush check. Возвращает 'attacker' | 'defender' | null.
+function rollAmbush(hex, units) {
+    const inHex = Object.values(units).filter(u => u.category === 'infantry' && isSameHex(u.hex, hex));
+    const atk = inHex.filter(u => u.side === 'attacker');
+    const def = inHex.filter(u => u.side === 'defender');
+    const atkDr = rollD6() + calcAmbushDRM(atk);
+    const defDr = rollD6() + calcAmbushDRM(def);
+    console.log(`[Ambush] atk dr+drm=${atkDr}, def dr+drm=${defDr}`);
+    if (defDr - atkDr >= 3) return 'attacker';
+    if (atkDr - defDr >= 3) return 'defender';
+    return null;
+}
+
+// В hex'е есть infantry обеих сторон (attacker + defender) → Melee.
+function check_if_both_sides_still_in_hex(hex, units) {
+    let hasAtk = false, hasDef = false;
+    for (const u of Object.values(units)) {
+        if (u.category !== 'infantry') continue;
+        if (!isSameHex(u.hex, hex)) continue;
+        if (u.side === 'attacker') hasAtk = true;
+        else if (u.side === 'defender') hasDef = true;
+        if (hasAtk && hasDef) return true;
+    }
+    return false;
+}
+
 function interdictionAttack(unit, escortLeader = null) {
     const baseDr = roll2d6();
     const leaderDrm = escortLeader ? (escortLeader.leadershipModifier ?? 0) : 0;
@@ -1372,7 +1463,9 @@ function _portageExcess(u, units, mg = null) {
             }).length;
         }
     }
-    return Math.max(0, possessedPP - ((u.ipc ?? 0) + smcBonus));
+    const baseIPC = u.ipc - (u.exhausted ? 1 : 0);   // CX → IPC -1
+    const effectiveIPC = Math.max(0, baseIPC + smcBonus);
+    return Math.max(0, possessedPP - effectiveIPC);
 }
 
 // Новый mf после хода (с учётом реактивно потраченных бонусов).
@@ -1637,7 +1730,14 @@ export const Rules = {
     checkLOS,
     findRoutShelter,
     interdictionAttack,
+    ccOddsColumn,
+    ccKillNumber,
+    check_if_both_sides_still_in_hex,
+    isAmbushEligibleHex,
+    rollAmbush,
+    roll2d6,
     check_KEU_range_and_adjacency,
+    _portageExcess,
     legalRoutNeighbors,
     calc_hex_to_every_hex_dist_map,
     pickNearestShelters,

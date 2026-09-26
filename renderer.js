@@ -117,6 +117,18 @@ export function initRenderer() {
             if (value) node.moveToTop();
         }
 
+        // Юнит выбран для advance-хода (APh) — красная рамка.
+        if (key === 'selectedForAdvance') {
+            node.findOne('.selectRect').visible(!!value);
+            if (value) node.moveToTop();
+        }
+
+        // Юнит выбран в CC-панели — красная рамка на карте.
+        if (key === 'ccSelected') {
+            node.findOne('.selectRect').visible(!!value);
+            if (value) node.moveToTop();
+        }
+
         // KIA — временный визуал перед удалением юнита.
         if (key === 'kia') {
             node.findOne('.kiaText').visible(value);

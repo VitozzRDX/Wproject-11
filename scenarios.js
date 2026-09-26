@@ -46,6 +46,8 @@ export const scenarios = {
       { templateId: 'ge_447', id: 'unit_08', side: 'defender', hex: { col: 39, row: 3 } },
       { templateId: 'ge_447', id: 'unit_09', side: 'defender', hex: { col: 39, row: 3 } },
       { templateId: 'ge_447', id: 'unit_10', side: 'defender', hex: { col: 45, row: 3 } },
+      { templateId: 'ge_447', id: 'unit_15', side: 'defender', hex: { col: 45, row: 3 } },
+      { templateId: 'ge_447', id: 'unit_16', side: 'defender', hex: { col: 49, row: 4 } },
       { templateId: 'ge_447', id: 'unit_12', side: 'defender', hex: { col: 43, row: 10 } },
       { templateId: 'ge_447', id: 'unit_13', side: 'defender', hex: { col: 46, row: 9 } },
       { templateId: 'ge_447', id: 'unit_ge_broken', side: 'defender', hex: { col: 41, row: 6 },

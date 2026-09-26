@@ -4,11 +4,13 @@ import { hexToPixel, R } from './hexUtils.js';
 // Два слоя: uiLayer — screen-fixed (кнопки, крутилка); worldFxLayer — world-anchored (LoS, residual, smoke).
 let uiLayer;
 let worldFxLayer;
+let ccLayer;                        // world-anchored, ПОД юнитами — только для CC-хекс подсветки
 const losLines = [];
 const residualNodes = new Map();   // hexKey → Konva.Group для residual FP счётчиков
 const routLegalNodes = [];         // Konva-ноды подсветки легальных rout-hex'ов (green)
 const routShelterNodes = [];       // Konva-ноды подсветки потенциальных укрытий (blue)
 const routPathNodes    = [];       // Konva-ноды подсветки коридора путей до укрытий (purple)
+const ccHexNodes       = [];       // Konva-ноды подсветки CC-хексов (orange)
 
 export const RendererUI = {
     // Очищает residualFP-счётчики и LoS-линии на worldFxLayer + все .img-* на uiLayer.
@@ -24,15 +26,24 @@ export const RendererUI = {
         routShelterNodes.length = 0;
         routPathNodes.forEach(n => n.destroy());
         routPathNodes.length = 0;
+        ccHexNodes.forEach(n => n.destroy());
+        ccHexNodes.length = 0;
         worldFxLayer?.batchDraw();
         // Удалить все .img-* (крутилка и другие персистентные UI-картинки)
         uiLayer?.getChildren(n => n.name()?.startsWith('img-')).forEach(n => n.destroy());
+        // Удалить CC-панель если была.
+        RendererUI.removeCCPanel();
         uiLayer?.batchDraw();
     },
 
     init(ui, worldFx) {
         uiLayer      = ui;
         worldFxLayer = worldFx;
+    },
+
+    // ccLayer пересоздаётся при loadScenario, устанавливается отдельно от init.
+    setCCLayer(cc) {
+        ccLayer = cc;
 
         UIState.subscribe((action, label, data) => {
             if (action === 'add')            RendererUI.drawButton(data);
@@ -47,6 +58,10 @@ export const RendererUI = {
             if (action === 'setRoutLegalHexes') RendererUI.drawRoutLegalHexes(data.hexes);
             if (action === 'setRoutShelters')   RendererUI.drawRoutShelters(data.hexes);
             if (action === 'setRoutPathHexes')  RendererUI.drawRoutPathHexes(data.hexes);
+            if (action === 'setCCHexes')        RendererUI.drawCCHexes(data.hexes);
+            if (action === 'showCCPanel')       RendererUI.drawCCPanel(data.units);
+            if (action === 'hideCCPanel')       RendererUI.removeCCPanel();
+            if (action === 'setCCPanelSelect')  RendererUI.updateCCPanelSelect(data.selectedIds);
         });
 
         // первичная отрисовка уже добавленных кнопок
@@ -226,6 +241,89 @@ export const RendererUI = {
             routPathNodes.push(node);
         }
         worldFxLayer.batchDraw();
+    },
+
+    // Подсветка CC-хексов (CCPh): красные полупрозрачные ромбы, под юнитами.
+    drawCCHexes(hexes) {
+        ccHexNodes.forEach(n => n.destroy());
+        ccHexNodes.length = 0;
+        if (!ccLayer) return;
+        for (const h of hexes) {
+            const { x, y } = hexToPixel(h.col, h.row);
+            const node = new Konva.RegularPolygon({
+                x, y, sides: 6, radius: R,
+                fill: 'rgba(220,20,20,0.35)',
+                stroke: 'rgba(180,0,0,0.9)',
+                strokeWidth: 2,
+                rotation: 30,
+                listening: false,
+            });
+            ccLayer.add(node);
+            ccHexNodes.push(node);
+        }
+        ccLayer.batchDraw();
+    },
+
+    // Панель для CC-разрешения: вертикальный список Konva.Image юнитов из currentCCHex.
+    // Каждая мини-группа имеет attr ccPanel=true + unitId для interpreter'а.
+    drawCCPanel(units) {
+        RendererUI.removeCCPanel();
+        if (!units.length) return;
+
+        const first = units[0].image;
+        const uw = first.width;
+        const uh = first.height;
+        const gap = 4;
+        const totalH = units.length * (uh + gap) - gap;
+        const stage = uiLayer.getStage();
+        const panelX = stage.width() - uw - 24;
+        const panelY = 60;
+
+        const panel = new Konva.Group({ x: panelX, y: panelY, name: 'ccPanel' });
+        panel.add(new Konva.Rect({
+            x: -8, y: -8, width: uw + 16, height: totalH + 16,
+            fill: 'rgba(0,0,0,0.7)', cornerRadius: 4,
+        }));
+
+        units.forEach((u, i) => {
+            const y = i * (uh + gap);
+            const row = new Konva.Group({ x: 0, y, name: 'ccPanelRow' });
+            row.setAttr('ccPanel', true);
+            row.setAttr('unitId', u.id);
+            const image = new Konva.Image({ image: u.image, x: 0, y: 0, width: uw, height: uh });
+            image.setAttr('unitId', u.id);   // клик по image → interpreter возьмёт unitId
+            const selRect = new Konva.Rect({
+                x: 0, y: 0, width: uw, height: uh,
+                stroke: 'red', strokeWidth: 1,
+                visible: false,
+                name: `ccPanelSelect-${u.id}`,
+                listening: false,
+            });
+            row.add(image, selRect);
+            panel.add(row);
+        });
+
+        uiLayer.add(panel);
+        uiLayer.batchDraw();
+    },
+
+    removeCCPanel() {
+        const panel = uiLayer?.findOne('.ccPanel');
+        if (panel) { panel.destroy(); uiLayer.batchDraw(); }
+    },
+
+    // Обновить visibility selectRect'ов в панели по списку выделенных.
+    updateCCPanelSelect(selectedIds) {
+        const panel = uiLayer?.findOne('.ccPanel');
+        if (!panel) return;
+        const set = new Set(selectedIds);
+        panel.find('Rect').forEach(r => {
+            const name = r.name() || '';
+            if (!name.startsWith('ccPanelSelect-')) return;
+            const uid = name.slice('ccPanelSelect-'.length);
+            r.visible(set.has(uid));
+        });
+        uiLayer.batchDraw();
     },
 
     drawHitPoints(points) {

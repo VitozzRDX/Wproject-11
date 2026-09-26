@@ -180,3 +180,99 @@ Rout Phase Summary
 - Units that must rout but cannot are eliminated.
 - If woods/building cannot be reached in a single RtPh (i.e., more than 6 MF
   away), unit may rout to any terrain consistent with all other requirements.
+
+3.7 Advance Phase (APh)
+The ATTACKER may move any of his Good Order, unpinned Infantry units to
+an adjacent hex (even if enemy units occupy the hex moved into).
+
+A unit advancing into a hex that requires all its MF must become CX.
+For example, a Russian squad carrying a five-PP MMG has only two MF and
+therefore must become CX to advance into a hex requiring two MF to enter
+during the MPh (brush, hills, woods, or building), unless accompanied by a
+leader who adds two MF and one IPC to the squad, thereby leaving it with
+five MF.
+
+A CX unit may not advance into a hex that would cost all its MF to enter.
+For example, a CX German squad possessing a four-PP HMG would have only two
+MF left after deducting for two excess PP (its IPC is reduced to two due to
+being CX) and cannot advance into a building hex, unless it is accompanied
+by a leader.
+
+3.8 Close Combat Phase (CCPh)
+Close Combat is a type of attack that occurs during the CCPh between opposing
+units in the same hex. There are no TEM modifications to a CC attack DR, and no
+Weapons apply. Unlike fire attacks, CC is simultaneous so both sides attack the
+other even if one or both is thereby eliminated, unless an ambush occurs.
+
+The ATTACKER specifies the order in which multiple hexes containing CC
+situations are to be resolved; each hex's CC for that turn must be completely
+resolved before resolving CC in another hex. Each side must designate all of
+its attacks in that hex prior to the resolution of any of them (ATTACKER
+designating his first). The DEFENDER then designates all of his attacks, after
+which the ATTACKER resolves all of his previously declared attacks. The
+DEFENDER then resolves all of his attacks — even if those units have been
+eliminated or reduced. Units may attack any unit or combination of units in
+the same hex, so long as no unit attacks or is attacked more than once per
+CCPh.
+
+- All units in the hex do not have to be attacked, nor do all units have to
+  make an attack.
+- Only unbroken units may attack, but even broken units defend, although they
+  suffer a -2 DRM to CC attacks against them.
+
+The FP of attacking units is compared to the FP of those enemy units being
+attacked in order to achieve a ratio of attack to defense FP strength called
+odds. Once odds have been determined, a DR is made for each attack. If the
+final DR is less than the number listed on the Close Combat Table (CCT) under
+the applicable odds column, the attacked units are eliminated. A final DR that
+equals the Kill number listed on the CCT results in Casualty Reduction of one
+of the attacked units (randomly determined). A final DR greater than the Kill
+number has no effect.
+
+Any SMC in CC has an attack and defense FP strength of one. A SMC may attack
+alone but if it does it must also defend alone. Any number of SMC may combine
+with MMC or other SMC to make a CC attack by adding their FP together. A SMC
+defends in CC as part of the group it attacks with by adding its one FP to the
+FP of the unit it is stacked on. A leader may direct the CC of the MMC it
+attacks and defends with (and any other unit which joins that MMC in a
+combined CC attack) by applying his leadership DRM to modify the CC DR, in
+addition to adding his FP to the strength of the attack. A leader may not use
+his leadership DRM to modify an attack he makes alone.
+
+Whenever Infantry advances into CC in a woods or building hex (unless
+reinforcing a Melee), an ambush can conceivably occur. Prior to declaring CC
+attacks in such a case, each player makes one dr. If either player rolls at
+least three less than the other, he has succeeded in ambushing his opponent.
+The side that has the ambush status in a CC is entitled to a -1 DRM to its CC
+attacks and a +1 to CC attacks against it until that CC becomes a Melee at the
+end of the CCPh. Ambush dr are subject to drm even if only a portion of a
+player's CC force is qualified to use it; drm include +1 for being CX, +1 for
+being pinned, +1 for being Inexperienced, and any leadership drm (unless the
+leader is alone). The ambushing side resolves all of its attacks in that CCPh
+first; only surviving enemy units may attack back after being ambushed.
+
+If Infantry from both sides (any of which is unbroken) remain in the same
+location after all initial CC attacks have been resolved at the end of the
+CCPh, they are considered to be locked in Melee and may not conduct any
+activity other than CC (e.g., leave that location, make a fire attack,
+interdict routing units, etc.). Place a Melee counter on such a stack. New
+units may advance into a Melee hex but must engage in CC. Non-Melee units may
+attack the Melee units during a fire phase but all friendly and enemy Melee
+units in the hex must be attacked. Remove the Melee counter as soon as no
+unbroken unit remains.
+
+CCT (Kill Number by odds ratio):
+  <1:8  = 0
+  1:8   = 1
+  1:6   = 2
+  1:4   = 3
+  1:2   = 4
+  1:1   = 5
+  3:2   = 6
+  2:1   = 7
+  3:1   = 8
+  4:1   = 9
+  6:1   = 10
+  8:1   = 11
+  10:1  = 12
+  >10:1 = 13
