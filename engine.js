@@ -329,6 +329,274 @@ const handlers = {
         else                     await _result_of_CC_in_hex();
     },
 
+    EndAttackerRecovery: () => {
+        // Attacker закончил Recovery → defender начинает. Сброс выбора + пересчёт highlights под defender'а.
+        State.rallySide = 'defender';
+        _clearRecoveryState();
+        _refreshRecoveryHighlights();
+        UIState.removeButton('EndAttackerRecovery');
+        UIState.addButton('EndDefenderRecovery', { x: 20, y: 100, label: 'EndDefenderRecovery' });
+        console.log('[RPh] defender recovery starts');
+    },
+
+    EndDefenderRecovery: () => {
+        // Обе стороны прошли Recovery → переход в Repair-подфазу, снова с attacker'а.
+        _clearAllRecoveryHighlights();
+        _clearRecoveryState();
+        State.rallySubPhase = 'repair';
+        State.rallySide = 'attacker';
+        UIState.removeButton('EndDefenderRecovery');
+        _enterRepairForCurrentSide();
+    },
+
+    EndAttackerRepair: () => {
+        // Attacker закончил → defender. Если нечего ремонтировать — auto-skip через _enterRepairForCurrentSide.
+        State.rallySide = 'defender';
+        _clearRepairState();
+        _clearAllRecoveryHighlights();   // снять подсветку старых eligible-weapons attacker'а
+        UIState.removeButton('EndAttackerRepair');
+        _enterRepairForCurrentSide();
+    },
+
+    EndDefenderRepair: () => {
+        // Обе стороны прошли Repair → переход в Transfer-подфазу.
+        _clearAllRecoveryHighlights();
+        _clearRepairState();
+        State.rallySubPhase = 'transfer';
+        State.rallySide = 'attacker';
+        UIState.removeButton('EndDefenderRepair');
+        UIState.addButton('EndAttackerTransfer', { x: 20, y: 100, label: 'EndAttackerTransfer' });
+        console.log('[RPh] attacker transfer starts');
+    },
+
+    SelectRepairHex: (ctx) => {
+        // Клик валиден только если в hex есть подсвеченное (eligible) broken оружие.
+        const hex = pixelToHex(ctx.pos.x, ctx.pos.y);
+        const hasEligible = Object.values(State.units).some(weapon =>
+            weapon.category === 'carried' && weapon.recoveryHighlight && isSameHex(weapon.hex, hex)
+        );
+        if (!hasEligible) return;
+        State.repairHex = hex;
+        UIState.addButton('RepairAttempt', { x: 20, y: 180, label: 'RepairAttempt' });
+        console.log(`[Repair] hex (${hex.col},${hex.row}) selected`);
+    },
+
+    RepairAttempt: async () => {
+        // Ищем сломанные орудия в выбранном гексе — кандидаты на попытку ремонта.
+        const brokenWeapons = Object.values(State.units).filter(weapon =>
+            weapon.category === 'carried' && weapon.broken && isSameHex(weapon.hex, State.repairHex)
+        );
+        for (const weapon of brokenWeapons) {
+            const possessor = State.units[weapon.possessorId];
+            // Possessor своей стороны, Good Order, не израсходовал action, нация совпадает.
+            if (possessor.side !== State.rallySide) continue;
+            if (possessor.broken || possessor.pinned) continue;
+            if (possessor.repairAttempted) continue;
+            if (weapon.nation !== possessor.nation) continue;
+
+            State.setUnit(possessor.id, 'repairAttempted', true);
+            const { result, dr } = Rules.rollRepairAttempt(weapon);
+            if (result === 'repaired') {
+                State.setUnit(weapon.id, 'broken', false);
+                console.log(`[Repair] ${possessor.id} repaired ${weapon.id} (dr=${dr})`);
+            } else if (result === 'eliminated') {
+                console.log(`[Repair] ${weapon.id} permanently eliminated (dr=6)`);
+                await _eliminateWithKIA(weapon.id);
+            } else {
+                console.log(`[Repair] ${possessor.id} failed to repair ${weapon.id} (dr=${dr})`);
+            }
+        }
+        _clearRepairState();
+        _refreshRepairHighlights();
+    },
+
+    SelectRecoveryHex: (ctx) => {
+        // Клик валиден только если в гексе есть хотя бы одно подсвеченное оружие.
+        const hex = pixelToHex(ctx.pos.x, ctx.pos.y);
+        const hasEligible = Object.values(State.units).some(w =>
+            w.category === 'carried' && w.recoveryHighlight && isSameHex(w.hex, hex)
+        );
+        if (!hasEligible) return;
+        State.recoveryHex = hex;
+        UIState.addButton('RecoveryAttempt', { x: 20, y: 180, label: 'RecoveryAttempt' });
+        console.log(`[Recovery] hex (${hex.col},${hex.row}) selected`);
+    },
+
+    RecoveryAttempt: () => {
+        // Целевое оружие — первое unpossessed carried в выбранном гексе.
+        const weapon = Object.values(State.units).find(w =>
+            w.category === 'carried' && !w.possessorId && isSameHex(w.hex, State.recoveryHex)
+        );
+        if (!weapon) { _clearRecoveryState(); return; }
+
+        // Перебор всех eligible пехотинцев в гексе. Каждый расходует свой RPh-action; первый успех останавливает.
+        const candidates = Object.values(State.units).filter(u =>
+            u.category === 'infantry' &&
+            u.side === State.rallySide &&
+            !u.broken && !u.pinned &&
+            !u.recoveryAttempted &&
+            isSameHex(u.hex, State.recoveryHex)
+        );
+        let recovered = false;
+        for (const u of candidates) {
+            State.setUnit(u.id, 'recoveryAttempted', true);
+            const { success } = Rules.rollRecoverAttempt(u);
+            if (success) {
+                State.setUnit(weapon.id, 'possessorId', u.id);
+                recalculateHex(weapon.hex);
+                console.log(`[Recovery] ${u.id} recovered ${weapon.id}`);
+                recovered = true;
+                break;
+            }
+        }
+        if (!recovered) console.log(`[Recovery] all units failed in hex (${State.recoveryHex.col},${State.recoveryHex.row})`);
+        _clearRecoveryState();
+        _refreshRecoveryHighlights();
+    },
+
+    EndAttackerTransfer: () => {
+        // Attacker закончил Transfer → defender.
+        State.rallySide = 'defender';
+        State.transferHex = null;
+        _clearTransferSelection();
+        UIState.hideTransferPanel();
+        UIState.removeButton('EndAttackerTransfer');
+        UIState.addButton('EndDefenderTransfer', { x: 20, y: 100, label: 'EndDefenderTransfer' });
+        console.log('[RPh] defender transfer starts');
+    },
+
+    EndDefenderTransfer: () => {
+        // Обе стороны прошли Transfer → переход в Self-Rally подфазу.
+        State.transferHex = null;
+        _clearTransferSelection();
+        UIState.hideTransferPanel();
+        State.rallySubPhase = 'selfRally';
+        State.rallySide = 'attacker';
+        UIState.removeButton('EndDefenderTransfer');
+        _enterSelfRallyForCurrentSide();
+    },
+
+    EndAttackerSelfRally: () => {
+        // Attacker закончил → defender. Если defender'у некого раллить — auto-skip.
+        State.rallySide = 'defender';
+        _clearSelfRallyState();
+        _clearAllSelfRallyHighlights();
+        UIState.removeButton('EndAttackerSelfRally');
+        _enterSelfRallyForCurrentSide();
+    },
+
+    EndDefenderSelfRally: () => {
+        // Обе стороны прошли Self-Rally → переход в Unit-Rally подфазу.
+        _clearAllSelfRallyHighlights();
+        _clearSelfRallyState();
+        UIState.removeButton('EndDefenderSelfRally');
+        State.rallySubPhase = 'unitRally';
+        State.rallySide = 'attacker';
+        _enterUnitRallyForCurrentSide();
+    },
+
+    SelectSelfRallyUnit: (ctx) => {
+        // Снимаем прежний выбор (если был), помечаем новый.
+        if (State.selfRallyUnit) State.setUnit(State.selfRallyUnit, 'selfRallySelected', false);
+        State.selfRallyUnit = ctx.unitId;
+        State.setUnit(ctx.unitId, 'selfRallySelected', true);
+        UIState.addButton('SelfRallyAttempt', { x: 20, y: 180, label: 'SelfRallyAttempt' });
+    },
+
+    EndAttackerUnitRally: () => {
+        State.rallySide = 'defender';
+        _clearUnitRallyState();
+        _clearAllUnitRallyHighlights();
+        UIState.removeButton('EndAttackerUnitRally');
+        _enterUnitRallyForCurrentSide();
+    },
+
+    EndDefenderUnitRally: () => {
+        // Обе стороны прошли Unit-Rally → RPh закончена, следующая фаза.
+        _clearAllUnitRallyHighlights();
+        _clearUnitRallyState();
+        UIState.removeButton('EndDefenderUnitRally');
+        handlers.NextPhase();
+    },
+
+    SelectUnitRallyUnit: (ctx) => {
+        if (State.unitRallyUnit) State.setUnit(State.unitRallyUnit, 'unitRallySelected', false);
+        State.unitRallyUnit = ctx.unitId;
+        State.setUnit(ctx.unitId, 'unitRallySelected', true);
+        UIState.addButton('UnitRallyAttempt', { x: 20, y: 180, label: 'UnitRallyAttempt' });
+    },
+
+    UnitRallyAttempt: async () => {
+        const u = State.units[State.unitRallyUnit];
+        // Good Order лидеры в том же hex (эквивалент single-hex FG для calcLeadershipDRM).
+        const leadersInHex = Object.values(State.units).filter(l =>
+            l.type === 'leader' && l.side === u.side &&
+            !l.broken && !l.pinned && isSameHex(l.hex, u.hex)
+        );
+        const leaderDRM = Rules.calcLeadershipDRM([u, ...leadersInHex]);
+        const { pass, originalTwelve } = Rules.rollRallyAttempt(u, { leaderDRM, kind: 'UnitRally' });
+        State.setUnit(u.id, 'unitRallyAttempted', true);
+
+        if (pass) {
+            State.setUnit(u.id, 'broken', false);
+            if (u.desperationMorale) State.setUnit(u.id, 'desperationMorale', false);
+        } else if (originalTwelve) {
+            console.log(`[UnitRally] ${u.id} original 12 → CR`);
+            if (u.halfSquad) _replace_unit(u.id, u.halfSquad, u.id);
+            else             await _eliminateWithKIA(u.id);
+        }
+        _clearUnitRallyState();
+        _refreshUnitRallyHighlights();
+    },
+
+    SelfRallyAttempt: async () => {
+        const u = State.units[State.selfRallyUnit];
+        const { pass, originalTwelve } = Rules.rollRallyAttempt(u, { selfPenalty: 1, kind: 'SelfRally' });
+        State.setUnit(u.id, 'selfRallyAttempted', true);
+        // Если это attacker's extra MMC (не selfRally) — пометить use бонусного слота.
+        if (!u.selfRally && State.rallySide === 'attacker') State.attackerExtraMMCUsed = true;
+
+        if (pass) {
+            State.setUnit(u.id, 'broken', false);
+            if (u.desperationMorale) State.setUnit(u.id, 'desperationMorale', false);
+        } else if (originalTwelve) {
+            // Casualty Reduction: squad → HS, HS/leader → eliminated.
+            console.log(`[SelfRally] ${u.id} original 12 → CR`);
+            if (u.halfSquad) _replace_unit(u.id, u.halfSquad, u.id);
+            else             await _eliminateWithKIA(u.id);
+        }
+        _clearSelfRallyState();
+        _refreshSelfRallyHighlights();
+        _autoEndSelfRallyIfNoneLeft();
+    },
+
+    SelectTransferHex: (ctx) => {
+        const hex = pixelToHex(ctx.pos.x, ctx.pos.y);
+        const unitsInClickedHex = Object.values(State.units).filter(u => isSameHex(u.hex, hex));
+        if (!unitsInClickedHex.some(u => u.category === 'infantry' && u.side === State.rallySide)) return;
+        _clearTransferSelection();
+        State.transferHex = hex;
+        UIState.showTransferPanel(unitsInClickedHex);
+        console.log(`[RPh] transfer panel opened at (${hex.col},${hex.row}), items=${unitsInClickedHex.length}`);
+    },
+
+    TransferPanelClick: (ctx) => {
+        const u = State.units[ctx.unitId];
+        if (u.category === 'carried') {
+            if (State.idTransferSelectedUnit) State.setUnit(State.idTransferSelectedUnit, 'transferSelected', false);
+            State.idTransferSelectedUnit = u.id;
+            State.setUnit(u.id, 'transferSelected', true);
+        } else if (u.category === 'infantry') {
+            if (u.side !== State.rallySide) return;
+            if (u.broken || u.pinned) return;
+            if (State.idUnitToGetWeapon) State.setUnit(State.idUnitToGetWeapon, 'transferSelected', false);
+            State.idUnitToGetWeapon = u.id;
+            State.setUnit(u.id, 'transferSelected', true);
+        }
+        UIState.setTransferPanelSelect([State.idTransferSelectedUnit, State.idUnitToGetWeapon].filter(Boolean));
+        _applyTransferIfReady();
+    },
+
     SelectForAdvance: (ctx) => {
         let uid = ctx.unitId;
         let u = State.units[uid];
@@ -389,6 +657,60 @@ const handlers = {
         UIState.rotateImage('turnphase', -45);   // 1/8 оборота против часовой (одна грань)
         console.log(`[phase] → ${p}`);
 
+        // Конец RPh: полный cleanup — recovery + transfer state, все кнопки RPh, action-флаги юнитов.
+        if (prevPhase === 'rally') {
+            State.rallySide = null;
+            State.rallySubPhase = null;
+            State.transferHex = null;
+            _clearTransferSelection();
+            _clearAllRecoveryHighlights();
+            _clearRecoveryState();
+            // Сбросить action-per-RPh флаги у всех юнитов, чтобы в следующей RPh можно было снова пытаться.
+            for (const u of Object.values(State.units)) {
+                if (u.recoveryAttempted) State.setUnit(u.id, 'recoveryAttempted', false);
+                if (u.repairAttempted)   State.setUnit(u.id, 'repairAttempted', false);
+            }
+            _clearRepairState();
+            UIState.removeButton('EndAttackerTransfer');
+            UIState.removeButton('EndDefenderTransfer');
+            UIState.removeButton('EndAttackerRecovery');
+            UIState.removeButton('EndDefenderRecovery');
+            UIState.removeButton('EndAttackerRepair');
+            UIState.removeButton('EndDefenderRepair');
+            UIState.removeButton('EndAttackerSelfRally');
+            UIState.removeButton('EndDefenderSelfRally');
+            UIState.removeButton('SelfRallyAttempt');
+            UIState.hideTransferPanel();
+            // SelfRally cleanup
+            for (const u of Object.values(State.units)) {
+                if (u.selfRallyAttempted) State.setUnit(u.id, 'selfRallyAttempted', false);
+                if (u.selfRallyHighlight) State.setUnit(u.id, 'selfRallyHighlight', false);
+                if (u.selfRallySelected)  State.setUnit(u.id, 'selfRallySelected', false);
+            }
+            State.attackerExtraMMCUsed = false;
+            State.selfRallyUnit = null;
+            // UnitRally cleanup
+            for (const u of Object.values(State.units)) {
+                if (u.unitRallyAttempted) State.setUnit(u.id, 'unitRallyAttempted', false);
+                if (u.unitRallyHighlight) State.setUnit(u.id, 'unitRallyHighlight', false);
+                if (u.unitRallySelected)  State.setUnit(u.id, 'unitRallySelected', false);
+            }
+            State.unitRallyUnit = null;
+            UIState.removeButton('EndAttackerUnitRally');
+            UIState.removeButton('EndDefenderUnitRally');
+            UIState.removeButton('UnitRallyAttempt');
+        }
+
+        // ВАЖНО: rally entry перенесён вниз (после CCPh side-swap) — иначе refresh считает по старым сторонам.
+
+        // Конец MPh: сбросить hasStartedMoving и movementCompleted (оба скоуп-MPh).
+        if (prevPhase === 'movement') {
+            for (const u of Object.values(State.units)) {
+                if (u.hasStartedMoving)   State.setUnit(u.id, 'hasStartedMoving', false);
+                if (u.movementCompleted)  State.setUnit(u.id, 'movementCompleted', false);
+            }
+        }
+
         // Конец MPh: убрать все Residual FP counters с карты.
         if (prevPhase === 'movement') {
             for (const key of Object.keys(State.residualFP)) {
@@ -410,10 +732,12 @@ const handlers = {
         }
 
         // Правило AFPh: убрать все Prep Fire и Adv Fire counters в конце фазы.
+        // Плюс сбросить movedThisMPh у оружий (нужен был для AFPh MMG/HMG-check).
         if (prevPhase === 'advancingFire') {
             for (const u of Object.values(State.units)) {
                 if (u.prepFired) State.setUnit(u.id, 'prepFired', false);
                 if (u.advFired)  State.setUnit(u.id, 'advFired', false);
+                if (u.category === 'carried' && u.movedThisMPh) State.setUnit(u.id, 'movedThisMPh', false);
             }
             console.log('[AFPh end] cleared Prep Fire and Adv Fire markers');
         }
@@ -454,6 +778,21 @@ const handlers = {
             UIState.removeButton('StartDefenderCC');
             UIState.removeButton('RollAmbush');
             UIState.removeButton('ResolveCC');
+            // 3.9 Turn Record: attacker ↔ defender.
+            for (const u of Object.values(State.units)) {
+                State.setUnit(u.id, 'side', u.side === 'attacker' ? 'defender' : 'attacker');
+            }
+            console.log('[Turn] sides swapped: attacker ↔ defender');
+        }
+
+        // Вход в RPh: старт Recovery-подфазы у attacker'а. Подсветить eligible weapons на карте.
+        // Должен идти ПОСЛЕ CCPh side-swap, иначе refresh посчитает по старым сторонам.
+        if (p === 'rally') {
+            State.rallySide = 'attacker';
+            State.rallySubPhase = 'recovery';
+            _refreshRecoveryHighlights();
+            UIState.addButton('EndAttackerRecovery', { x: 20, y: 100, label: 'EndAttackerRecovery' });
+            console.log('[RPh] attacker recovery starts');
         }
 
         // Вход в APh: сбросить MF для attacker Good Order Infantry (фаза даёт свежий MF).
@@ -774,6 +1113,214 @@ function _confirmAttackFromPools(attackers, targets, list) {
     attackers.length = 0;
     targets.length = 0;
     return confirmed;
+}
+
+// Снимает transferSelected с обоих слотов и обнуляет их.
+function _clearTransferSelection() {
+    if (State.idTransferSelectedUnit) State.setUnit(State.idTransferSelectedUnit, 'transferSelected', false);
+    if (State.idUnitToGetWeapon)      State.setUnit(State.idUnitToGetWeapon, 'transferSelected', false);
+    State.idTransferSelectedUnit = null;
+    State.idUnitToGetWeapon = null;
+}
+
+// Перерисовать transfer-панель для текущего transferHex.
+function _refreshTransferPanel() {
+    const units = Object.values(State.units).filter(u => isSameHex(u.hex, State.transferHex));
+    UIState.showTransferPanel(units);
+}
+
+// Если оба слота заполнены — выполнить transfer и очистить.
+function _applyTransferIfReady() {
+    if (!State.idTransferSelectedUnit || !State.idUnitToGetWeapon) return;
+    const w = State.units[State.idTransferSelectedUnit];
+    State.setUnit(State.idTransferSelectedUnit, 'possessorId', State.idUnitToGetWeapon);
+    recalculateHex(w.hex);   // пересобрать стек (weapon теперь под новым possessor'ом)
+    console.log(`[RPh] weapon ${State.idTransferSelectedUnit} → ${State.idUnitToGetWeapon}`);
+    _clearTransferSelection();
+    _refreshTransferPanel();
+}
+
+// Пробегает по всем weapons: подсвечивает те, что unpossessed AND лежат в гексе со своим Good Order
+// юнитом (rallySide), который ещё не пытался recovery в этом RPh. Остальные — снимает подсветку.
+function _refreshRecoveryHighlights() {
+    for (const w of Object.values(State.units)) {
+        if (w.category !== 'carried') continue;
+        const eligible = !w.possessorId && Object.values(State.units).some(u =>
+            u.category === 'infantry' &&
+            u.side === State.rallySide &&
+            !u.broken && !u.pinned &&
+            !u.recoveryAttempted &&
+            isSameHex(u.hex, w.hex)
+        );
+        if (w.recoveryHighlight !== eligible) State.setUnit(w.id, 'recoveryHighlight', eligible);
+    }
+}
+
+// Полная очистка recoveryHighlight у всех weapons — при переходе из recovery-подфазы наружу.
+function _clearAllRecoveryHighlights() {
+    for (const w of Object.values(State.units)) {
+        if (w.category === 'carried' && w.recoveryHighlight) State.setUnit(w.id, 'recoveryHighlight', false);
+    }
+}
+
+// Сброс выбранного recoveryHex и кнопки RecoveryAttempt — промежуточное состояние между попытками.
+function _clearRecoveryState() {
+    State.recoveryHex = null;
+    UIState.removeButton('RecoveryAttempt');
+}
+
+// Подсвечиваем broken-оружие, чей possessor Good Order своей стороны, не израсходовал repair-action
+// и совпадает по нации. Переиспользуем recoveryHighlight (подфазы Recovery/Repair взаимоисключающие).
+function _refreshRepairHighlights() {
+    for (const weapon of Object.values(State.units)) {
+        if (weapon.category !== 'carried') continue;
+        let eligible = false;
+        if (weapon.broken && weapon.possessorId) {
+            const possessor = State.units[weapon.possessorId];
+            eligible = !!possessor
+                && possessor.side === State.rallySide
+                && !possessor.broken && !possessor.pinned
+                && !possessor.repairAttempted
+                && weapon.nation === possessor.nation;
+        }
+        if (weapon.recoveryHighlight !== eligible) State.setUnit(weapon.id, 'recoveryHighlight', eligible);
+    }
+}
+
+// Сброс выбранного repairHex и кнопки RepairAttempt.
+function _clearRepairState() {
+    State.repairHex = null;
+    UIState.removeButton('RepairAttempt');
+}
+
+// Юнит eligible для self-rally: broken, свой, не израсходовал action, selfRally=true
+// ИЛИ один non-selfRally squad для attacker (бонусная попытка).
+function _isSelfRallyEligible(u) {
+    if (u.category !== 'infantry') return false;
+    if (!u.broken) return false;
+    if (u.side !== State.rallySide) return false;
+    if (u.selfRallyAttempted) return false;
+    if (u.selfRally) return true;
+    if (State.rallySide !== 'attacker') return false;
+    if (State.attackerExtraMMCUsed) return false;
+    return u.type === 'squad';
+}
+
+function _refreshSelfRallyHighlights() {
+    for (const u of Object.values(State.units)) {
+        if (u.category !== 'infantry') continue;
+        const eligible = _isSelfRallyEligible(u);
+        if (u.selfRallyHighlight !== eligible) State.setUnit(u.id, 'selfRallyHighlight', eligible);
+    }
+}
+
+function _clearAllSelfRallyHighlights() {
+    for (const u of Object.values(State.units)) {
+        if (u.selfRallyHighlight) State.setUnit(u.id, 'selfRallyHighlight', false);
+    }
+}
+
+function _clearSelfRallyState() {
+    // Юнит мог быть удалён через CR (original 12) — проверяем перед setUnit.
+    if (State.selfRallyUnit && State.units[State.selfRallyUnit]) {
+        State.setUnit(State.selfRallyUnit, 'selfRallySelected', false);
+    }
+    State.selfRallyUnit = null;
+    UIState.removeButton('SelfRallyAttempt');
+}
+
+// Если после попытки SelfRally никого не осталось в highlight — автоматом завершаем подфазу стороны.
+function _autoEndSelfRallyIfNoneLeft() {
+    const hasAny = Object.values(State.units).some(x => x.category === 'infantry' && x.selfRallyHighlight);
+    if (hasAny) return;
+    if (State.rallySide === 'attacker') handlers.EndAttackerSelfRally();
+    else                                 handlers.EndDefenderSelfRally();
+}
+
+// Вход в Self-Rally подфазу: highlight + auto-skip если некого раллить.
+function _enterSelfRallyForCurrentSide() {
+    _refreshSelfRallyHighlights();
+    const hasAny = Object.values(State.units).some(u => u.category === 'infantry' && u.selfRallyHighlight);
+    if (!hasAny) {
+        console.log(`[RPh] ${State.rallySide} self-rally: nothing to rally, auto-skip`);
+        if (State.rallySide === 'attacker') handlers.EndAttackerSelfRally();
+        else                                 handlers.EndDefenderSelfRally();
+        return;
+    }
+    const btn = State.rallySide === 'attacker' ? 'EndAttackerSelfRally' : 'EndDefenderSelfRally';
+    UIState.addButton(btn, { x: 20, y: 100, label: btn });
+    console.log(`[RPh] ${State.rallySide} self-rally starts`);
+}
+
+// Юнит eligible для unit-rally: broken, свой, не израсходовал action, не-лидер,
+// и в его hex есть Good Order лидер той же стороны (кто-то его раллит).
+function _isUnitRallyEligible(u) {
+    if (u.category !== 'infantry') return false;
+    if (!u.broken) return false;
+    if (u.side !== State.rallySide) return false;
+    if (u.unitRallyAttempted) return false;
+    if (u.type === 'leader') return false;
+    return Object.values(State.units).some(l =>
+        l.type === 'leader' && l.side === State.rallySide &&
+        !l.broken && !l.pinned &&
+        isSameHex(l.hex, u.hex)
+    );
+}
+
+function _refreshUnitRallyHighlights() {
+    for (const u of Object.values(State.units)) {
+        if (u.category !== 'infantry') continue;
+        const eligible = _isUnitRallyEligible(u);
+        if (u.unitRallyHighlight !== eligible) State.setUnit(u.id, 'unitRallyHighlight', eligible);
+    }
+}
+
+function _clearAllUnitRallyHighlights() {
+    for (const u of Object.values(State.units)) {
+        if (u.unitRallyHighlight) State.setUnit(u.id, 'unitRallyHighlight', false);
+    }
+}
+
+function _clearUnitRallyState() {
+    if (State.unitRallyUnit && State.units[State.unitRallyUnit]) {
+        State.setUnit(State.unitRallyUnit, 'unitRallySelected', false);
+    }
+    State.unitRallyUnit = null;
+    UIState.removeButton('UnitRallyAttempt');
+}
+
+// Вход в Unit-Rally подфазу: highlight + auto-skip если некого раллить.
+function _enterUnitRallyForCurrentSide() {
+    _refreshUnitRallyHighlights();
+    const hasAny = Object.values(State.units).some(u => u.category === 'infantry' && u.unitRallyHighlight);
+    if (!hasAny) {
+        console.log(`[RPh] ${State.rallySide} unit-rally: nothing to rally, auto-skip`);
+        if (State.rallySide === 'attacker') handlers.EndAttackerUnitRally();
+        else                                 handlers.EndDefenderUnitRally();
+        return;
+    }
+    const btn = State.rallySide === 'attacker' ? 'EndAttackerUnitRally' : 'EndDefenderUnitRally';
+    UIState.addButton(btn, { x: 20, y: 100, label: btn });
+    console.log(`[RPh] ${State.rallySide} unit-rally starts`);
+}
+
+// Вход в Repair-подфазу для текущей rallySide: подсвечиваем eligible-weapons.
+// Если нечего ремонтировать — автопереход в следующую подфазу через соответствующий End-handler,
+// чтобы игрок не нажимал бесполезную кнопку.
+function _enterRepairForCurrentSide() {
+    _refreshRepairHighlights();
+    const hasAnyEligible = Object.values(State.units).some(w =>
+        w.category === 'carried' && w.recoveryHighlight
+    );
+    if (!hasAnyEligible) {
+        console.log(`[RPh] ${State.rallySide} repair: nothing to repair, auto-skip`);
+        if (State.rallySide === 'attacker') handlers.EndAttackerRepair();
+        else                                 handlers.EndDefenderRepair();
+        return;
+    }
+    const btn = State.rallySide === 'attacker' ? 'EndAttackerRepair' : 'EndDefenderRepair';
+    UIState.addButton(btn, { x: 20, y: 100, label: btn });
+    console.log(`[RPh] ${State.rallySide} repair starts`);
 }
 
 // Помечает хекс как CC-hex если там есть enemy infantry (после Advance-хода).
@@ -1532,6 +2079,7 @@ async function _apply_movement_result_in_State_for_all_MG(result, targetHex, ove
         Object.values(State.units).forEach(w => {
             if (w.category === 'carried' && w.possessorId === unitId) {
                 State.setUnit(w.id, 'hex', targetHex);
+                State.setUnit(w.id, 'movedThisMPh', true);   // оружие сменило гекс
             }
         });
     });

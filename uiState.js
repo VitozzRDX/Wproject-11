@@ -76,4 +76,16 @@ export const UIState = {
     setCCPanelSelect(selectedIds) {
         this.subscribers.forEach(sub => sub('setCCPanelSelect', null, { selectedIds }));
     },
+
+    showTransferPanel(units) {
+        this.subscribers.forEach(sub => sub('showTransferPanel', null, { units }));
+    },
+
+    hideTransferPanel() {
+        this.subscribers.forEach(sub => sub('hideTransferPanel', null, {}));
+    },
+
+    setTransferPanelSelect(selectedIds) {
+        this.subscribers.forEach(sub => sub('setTransferPanelSelect', null, { selectedIds }));
+    },
 }

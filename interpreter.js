@@ -12,12 +12,14 @@ function createContext(e) {
     const shiftKey    = e.evt.shiftKey;                               // зажат ли шифт
     // ccPanel — клик по юниту в CC-панели (uiLayer), а не по юниту на поле.
     const ccPanel     = e.target.getParent()?.getAttr('ccPanel') === true;
+    // transferPanel — клик по элементу transfer-панели (RPh, uiLayer).
+    const transferPanel = e.target.getParent()?.getAttr('transferPanel') === true;
     // мировые координаты клика (учитываем сдвиг stage от скроллинга WASD)
     const stage       = e.target.getStage();
     const raw         = stage.getPointerPosition();
     const pos         = { x: raw.x - stage.x(), y: raw.y - stage.y() };
 
-    return { unitId, buttonLabel, button, shiftKey, pos, ccPanel };
+    return { unitId, buttonLabel, button, shiftKey, pos, ccPanel, transferPanel };
 }
 
 // ---------------------------------------------------------------------------
@@ -405,6 +407,156 @@ const RULES = [
             clickedBtn: ctx => ctx.buttonLabel === 'RollAmbush',
         }],
         name: 'RollAmbush'
+    },
+    // RPh Transfer: кнопка EndAttackerTransfer → переход в defender transfer.
+    {
+        requiresAny: [{
+            phaseIsRally: () => PhaseManager.getPhase() === 'rally',
+            leftClick:    ctx => ctx.button !== 2,
+            clickedBtn:   ctx => ctx.buttonLabel === 'EndAttackerTransfer',
+        }],
+        name: 'EndAttackerTransfer'
+    },
+    // RPh Transfer: кнопка EndDefenderTransfer → переход в Self-Rally подфазу.
+    {
+        requiresAny: [{
+            phaseIsRally: () => PhaseManager.getPhase() === 'rally',
+            leftClick:    ctx => ctx.button !== 2,
+            clickedBtn:   ctx => ctx.buttonLabel === 'EndDefenderTransfer',
+        }],
+        name: 'EndDefenderTransfer'
+    },
+    // RPh Transfer: клик по элементу transfer-панели (weapon или infantry).
+    {
+        requiresAny: [{
+            phaseIsRally:       () => PhaseManager.getPhase() === 'rally',
+            subPhaseIsTransfer: () => State.rallySubPhase === 'transfer',
+            leftClick:          ctx => ctx.button !== 2,
+            transferPanel:      ctx => ctx.transferPanel,
+            hasUnit:            ctx => ctx.unitId !== undefined,
+        }],
+        name: 'TransferPanelClick'
+    },
+    // RPh Transfer: клик по гексу или юниту на карте — открыть transfer-панель для этого гекса.
+    {
+        requiresAny: [{
+            phaseIsRally:       () => PhaseManager.getPhase() === 'rally',
+            subPhaseIsTransfer: () => State.rallySubPhase === 'transfer',
+            leftClick:          ctx => ctx.button !== 2,
+            notPanel:           ctx => !ctx.transferPanel,
+            notButton:          ctx => ctx.buttonLabel === undefined,
+        }],
+        name: 'SelectTransferHex'
+    },
+
+    // RPh Recovery: кнопка EndAttackerRecovery → переход в defender-полу-фазу recovery.
+    {
+        requiresAny: [{
+            phaseIsRally: () => PhaseManager.getPhase() === 'rally',
+            leftClick:    ctx => ctx.button !== 2,
+            clickedBtn:   ctx => ctx.buttonLabel === 'EndAttackerRecovery',
+        }],
+        name: 'EndAttackerRecovery'
+    },
+    // RPh Recovery: кнопка EndDefenderRecovery → переход в Transfer-подфазу.
+    {
+        requiresAny: [{
+            phaseIsRally: () => PhaseManager.getPhase() === 'rally',
+            leftClick:    ctx => ctx.button !== 2,
+            clickedBtn:   ctx => ctx.buttonLabel === 'EndDefenderRecovery',
+        }],
+        name: 'EndDefenderRecovery'
+    },
+    // RPh Recovery: кнопка RecoveryAttempt → перебор eligible юнитов в выбранном гексе.
+    {
+        requiresAny: [{
+            phaseIsRally: () => PhaseManager.getPhase() === 'rally',
+            leftClick:    ctx => ctx.button !== 2,
+            clickedBtn:   ctx => ctx.buttonLabel === 'RecoveryAttempt',
+        }],
+        name: 'RecoveryAttempt'
+    },
+    // RPh Recovery: клик по гексу с eligible-оружием → выбрать этот гекс для попытки.
+    {
+        requiresAny: [{
+            phaseIsRally:       () => PhaseManager.getPhase() === 'rally',
+            subPhaseIsRecovery: () => State.rallySubPhase === 'recovery',
+            leftClick:          ctx => ctx.button !== 2,
+            notButton:          ctx => ctx.buttonLabel === undefined,
+        }],
+        name: 'SelectRecoveryHex'
+    },
+
+    // RPh Repair: кнопка EndAttackerRepair → переход в defender-полу-фазу repair.
+    {
+        requiresAny: [{
+            phaseIsRally: () => PhaseManager.getPhase() === 'rally',
+            leftClick:    ctx => ctx.button !== 2,
+            clickedBtn:   ctx => ctx.buttonLabel === 'EndAttackerRepair',
+        }],
+        name: 'EndAttackerRepair'
+    },
+    // RPh Repair: кнопка EndDefenderRepair → переход в Transfer-подфазу.
+    {
+        requiresAny: [{
+            phaseIsRally: () => PhaseManager.getPhase() === 'rally',
+            leftClick:    ctx => ctx.button !== 2,
+            clickedBtn:   ctx => ctx.buttonLabel === 'EndDefenderRepair',
+        }],
+        name: 'EndDefenderRepair'
+    },
+    // RPh Repair: кнопка RepairAttempt → попытка ремонта всех eligible-weapons в выбранном гексе.
+    {
+        requiresAny: [{
+            phaseIsRally: () => PhaseManager.getPhase() === 'rally',
+            leftClick:    ctx => ctx.button !== 2,
+            clickedBtn:   ctx => ctx.buttonLabel === 'RepairAttempt',
+        }],
+        name: 'RepairAttempt'
+    },
+    // RPh Repair: клик по гексу с eligible-broken оружием → выбрать hex для попытки.
+    {
+        requiresAny: [{
+            phaseIsRally:     () => PhaseManager.getPhase() === 'rally',
+            subPhaseIsRepair: () => State.rallySubPhase === 'repair',
+            leftClick:        ctx => ctx.button !== 2,
+            notButton:        ctx => ctx.buttonLabel === undefined,
+        }],
+        name: 'SelectRepairHex'
+    },
+
+    // RPh SelfRally: кнопки под-фазы + attempt.
+    { requiresAny: [{ phaseIsRally: ()=>PhaseManager.getPhase()==='rally', leftClick: c=>c.button!==2, clickedBtn: c=>c.buttonLabel==='EndAttackerSelfRally' }], name: 'EndAttackerSelfRally' },
+    { requiresAny: [{ phaseIsRally: ()=>PhaseManager.getPhase()==='rally', leftClick: c=>c.button!==2, clickedBtn: c=>c.buttonLabel==='EndDefenderSelfRally' }], name: 'EndDefenderSelfRally' },
+    { requiresAny: [{ phaseIsRally: ()=>PhaseManager.getPhase()==='rally', leftClick: c=>c.button!==2, clickedBtn: c=>c.buttonLabel==='SelfRallyAttempt' }], name: 'SelfRallyAttempt' },
+
+    // RPh SelfRally: клик по highlighted юниту → выбрать его для попытки.
+    {
+        requiresAny: [{
+            phaseIsRally:        () => PhaseManager.getPhase() === 'rally',
+            subPhaseIsSelfRally: () => State.rallySubPhase === 'selfRally',
+            leftClick:           ctx => ctx.button !== 2,
+            hasUnit:             ctx => ctx.unitId !== undefined,
+            isHighlighted:       ctx => State.units[ctx.unitId]?.selfRallyHighlight,
+        }],
+        name: 'SelectSelfRallyUnit'
+    },
+
+    // RPh UnitRally: кнопки под-фазы + attempt.
+    { requiresAny: [{ phaseIsRally: ()=>PhaseManager.getPhase()==='rally', leftClick: c=>c.button!==2, clickedBtn: c=>c.buttonLabel==='EndAttackerUnitRally' }], name: 'EndAttackerUnitRally' },
+    { requiresAny: [{ phaseIsRally: ()=>PhaseManager.getPhase()==='rally', leftClick: c=>c.button!==2, clickedBtn: c=>c.buttonLabel==='EndDefenderUnitRally' }], name: 'EndDefenderUnitRally' },
+    { requiresAny: [{ phaseIsRally: ()=>PhaseManager.getPhase()==='rally', leftClick: c=>c.button!==2, clickedBtn: c=>c.buttonLabel==='UnitRallyAttempt' }], name: 'UnitRallyAttempt' },
+
+    // RPh UnitRally: клик по highlighted юниту → выбрать его для попытки.
+    {
+        requiresAny: [{
+            phaseIsRally:        () => PhaseManager.getPhase() === 'rally',
+            subPhaseIsUnitRally: () => State.rallySubPhase === 'unitRally',
+            leftClick:           ctx => ctx.button !== 2,
+            hasUnit:             ctx => ctx.unitId !== undefined,
+            isHighlighted:       ctx => State.units[ctx.unitId]?.unitRallyHighlight,
+        }],
+        name: 'SelectUnitRallyUnit'
     },
 
 ]

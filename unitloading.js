@@ -33,12 +33,21 @@ const Infantry         = { ...Unit, category: 'infantry',
                                     escortingRouter: null,   // id router'а которого сопровождает (для leader'а)
                                     selectedForAdvance: false, // выделен для advance-хода (APh)
                                     ccSelected: false,         // выделен в CC-панели (CCPh)
-                                    inMelee: false };          // Melee — CC не разрешён, гекс остаётся CC-hex
+                                    inMelee: false,            // Melee — CC не разрешён, гекс остаётся CC-hex
+                                    transferSelected: false,   // выделен в transfer-панели (RPh)
+                                    recoveryAttempted: false,  // юнит уже пытался recovery в этом RPh
+                                    repairAttempted: false,    // юнит уже пытался repair в этом RPh
+                                    selfRallyAttempted: false, // юнит уже пытался self-rally в этом RPh
+                                    selfRallyHighlight: false, // подсветка eligible для self-rally (визуал через recoveryRect)
+                                    selfRallySelected: false,  // юнит выбран для SelfRallyAttempt (selectRect)
+                                    unitRallyAttempted: false, // юнит уже пытался unit-rally в этом RPh
+                                    unitRallyHighlight: false, // подсветка eligible для unit-rally (recoveryRect)
+                                    unitRallySelected: false }; // юнит выбран для UnitRallyAttempt (selectRect)
 const Squad            = { ...Infantry, type: 'squad', mf: 4, leaderBonus: 2, firingStatus: ' ', ipc: 3 };   // MMC
 const Leader           = { ...Infantry, type: 'leader', mf: 6, quality: 'Elite', ipc: 1 };                    // SMC
-const GermanSquad_1st   = { ...Squad,  nation: 'german',   quality: '1stLine', selfRally: true  };
-const SovietSquad_Elite = { ...Squad,  nation: 'soviet',   quality: 'Elite',   selfRally: true  };
-const AmericanSquad     = { ...Squad,  nation: 'american', quality: 'Elite',   selfRally: true  };
+const GermanSquad_1st   = { ...Squad,  nation: 'german',   quality: '1stLine' };
+const SovietSquad_Elite = { ...Squad,  nation: 'soviet',   quality: 'Elite'   };
+const AmericanSquad     = { ...Squad,  nation: 'american', quality: 'Elite'   };
 const GermanLeader      = { ...Leader, nation: 'german' };
 const SovietLeader      = { ...Leader, nation: 'soviet' };
 const AmericanLeader    = { ...Leader, nation: 'american' };
@@ -47,7 +56,9 @@ const AmericanLeader    = { ...Leader, nation: 'american' };
 const CarriedItem      = { ...Unit, category: 'carried',
                                     possessorId: null,
                                     movedThisMPh: false,   // подобран/дропнут/пронесён в текущей MPh
-                                    broken: false };       // weapon-jam / malfunction (B# сработал)
+                                    broken: false,         // weapon-jam / malfunction (B# сработал)
+                                    transferSelected: false, // выделен в transfer-панели (RPh)
+                                    recoveryHighlight: false }; // подсвечен как eligible для recovery (RPh)
 const SW               = { ...CarriedItem, type: 'SW', firingStatus: ' ' };
 const MG               = { ...SW, kind: 'MG' };
 
@@ -91,7 +102,7 @@ const TEMPLATES = {
   'so_L81': { ...SovietLeader, morale: 8, brokenMorale: 8, leadershipModifier: -1, selfRally: true, src: './graf/ruL81.gif', brokenSrc: './graf/ruL81b.gif' },
 
   // American squads / HS (elr=20 explicit — не подвержены quality reduce в этом сценарии)
-  'am_667': { ...AmericanSquad, quality: 'Elite',   firepower: 6, range: 6, morale: 7, brokenMorale: 7, smokeExponent: 3, elr: 20, lowerQuality: null, halfSquad: 'am_347', src: './graf/am667S.gif', brokenSrc: './graf/amc7b.gif' },
+  'am_667': { ...AmericanSquad, quality: 'Elite',   firepower: 6, range: 6, morale: 7, brokenMorale: 7, smokeExponent: 3, elr: 20, lowerQuality: null, halfSquad: 'am_347', selfRally: true, src: './graf/am667S.gif', brokenSrc: './graf/amc7b.gif' },
   'am_347': { ...AmericanSquad, quality: 'Elite',   firepower: 3, range: 4, morale: 7, brokenMorale: 7, size: 'halfSquad', src: './graf/am347H.gif', brokenSrc: './graf/amc7b.gif' },
   'am_536': { ...AmericanSquad, quality: '2ndLine', firepower: 5, range: 3, morale: 6, brokenMorale: 6, elr: 20, lowerQuality: null, halfSquad: 'am_226', src: './graf/am536S.gif', brokenSrc: './graf/amh6b.gif' },
   'am_226': { ...AmericanSquad, quality: '2ndLine', firepower: 2, range: 2, morale: 6, brokenMorale: 6, size: 'halfSquad', src: './graf/am226H.gif', brokenSrc: './graf/amh6b.gif' },
@@ -133,7 +144,7 @@ function loadImage(src) {
 // ---------------------------------------------------------------------------
 // Создание одного юнита
 // ---------------------------------------------------------------------------
-function createUnit(data, layer) {
+async function createUnit(data, layer) {
 
   const w = data.image.width;
   const h = data.image.height;
@@ -185,6 +196,17 @@ function createUnit(data, layer) {
   name: 'selectRect',
   listening: false,
 });
+
+  // Красная рамка на unpossessed оружии в RPh, помечающая eligible-hex для recovery.
+  const recoveryRect = new Konva.Rect({
+    x: 0, y: 0,
+    width: w, height: h,
+    stroke: 'red',
+    strokeWidth: 2,
+    visible: false,
+    name: 'recoveryRect',
+    listening: false,
+  });
 
 const addToMovementGroupRect = new Konva.Rect({
     x: 0, y: 0,
@@ -352,7 +374,7 @@ const inRoutingRect = new Konva.Rect({
     listening: false,
 });
 
-    group.add(image, movedRect, movedText, activeRect, activeText, selectRect, addToMovementGroupRect, addToFireGroupRect, cxText, pinBg, pinText, dmText, woundedRect, woundedCross, woundedText, ffRect, ffText, ffBigText, pfText, afRect, afText, mustRoutRect, inRoutingRect, kiaText);
+    group.add(image, movedRect, movedText, activeRect, activeText, selectRect, recoveryRect, addToMovementGroupRect, addToFireGroupRect, cxText, pinBg, pinText, dmText, woundedRect, woundedCross, woundedText, ffRect, ffText, ffBigText, pfText, afRect, afText, mustRoutRect, inRoutingRect, kiaText);
     
     const unit = { ...data, node: group };
 
@@ -363,6 +385,7 @@ const inRoutingRect = new Konva.Rect({
     activeRect.listening(false);
     activeText.listening(false);
     selectRect.listening(false);
+    recoveryRect.listening(false);
       addToMovementGroupRect.listening(false);
       addToFireGroupRect.listening(false);
 
@@ -370,10 +393,8 @@ const inRoutingRect = new Konva.Rect({
     State.addUnit(unit);
     layer.add(group);
 
-    // предзагрузка broken-графики
-    if (data.brokenSrc) {
-        loadImage(data.brokenSrc).then(img => { unit.brokenImage = img; });
-    }
+    // Синхронно грузим broken-картинку, чтобы флип в будущем сработал без тайминговых гонок.
+    if (data.brokenSrc) unit.brokenImage = await loadImage(data.brokenSrc);
 
     return unit;
 
@@ -405,13 +426,18 @@ export async function createAndLoadUnits(layer, scenarioUnits) {
         // ELR per-unit: юниты без lowerQuality (Conscript, leader) не подвержены quality reduce
         template.elr = tmpl.lowerQuality ? (State.elr[tmpl.nation] ?? 3) : 20;
 
-        // Broken → сразу грузим broken-спрайт (иначе покажется целым).
-        const initialSrc = (template.broken && tmpl.brokenSrc) ? tmpl.brokenSrc : template.src;
-        const image    = await loadImage(initialSrc);
+        // Всегда грузим нормальный спрайт в unit.image (нужен для flip-обратно после repair).
+        // Если юнит стартует broken — отдельно показываем broken-спрайт в Konva.Image.
+        const image    = await loadImage(template.src);
         const { x, y } = hexToPixel(resolvedHex.col, resolvedHex.row);
         const cx       = x - image.width  / 2;
         const cy       = y - image.height / 2;
-        createUnit({ ...template, image, x: cx, y: cy }, layer);
+        await createUnit({ ...template, image, x: cx, y: cy }, layer);
+        if (template.broken && tmpl.brokenSrc) {
+            // brokenImage уже лежит на юните (загружен внутри createUnit); для broken-at-start
+            // показываем сломанную сторону в Konva.Image, но нормальная остаётся в unit.image.
+            State.units[record.id].node.findOne('Image').image(State.units[record.id].brokenImage);
+        }
 
         // Прогнать overrides через State.setUnit чтобы renderer/подписчики подхватили
         // визуалы (dm rect, mustRout border и т.д.). Пропускаем broken — image уже
@@ -443,5 +469,5 @@ export async function spawn_unit(templateId, id, hex, layer, side = null) {
     const { x, y } = hexToPixel(hex.col, hex.row);
     const cx       = x - image.width / 2;
     const cy       = y - image.height / 2;
-    return createUnit({ ...template, image, x: cx, y: cy }, layer);
+    return await createUnit({ ...template, image, x: cx, y: cy }, layer);
 }

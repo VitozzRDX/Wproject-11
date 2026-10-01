@@ -1596,10 +1596,10 @@ export const Rules = {
             // Национальность weapon = национальность possessor'а (можно владеть трофейным)
             if (possessor.side !== firingSide) return false;
 
-            // AFPh: MMG/HMG не могут стрелять если possessor двигался в MPh.
+            // AFPh: MMG/HMG не могут стрелять если оружие двигалось в MPh (сам weapon, не possessor).
             if (PhaseManager.getPhase() === 'advancingFire' &&
                 (unit.mgClass === 'MMG' || unit.mgClass === 'HMG') &&
-                possessor.hasStartedMoving) {
+                unit.movedThisMPh) {
                 return false;
             }
             // AFPh: weapon уже стрелял в AFPh?
@@ -1679,6 +1679,31 @@ export const Rules = {
         console.log(`[recover] ${u.id}: dr=${raw}${u.exhausted ? '+1 CX' : ''}=${dr} → ${success ? 'ok' : 'fail'}`);
         return { success };
     },
+
+    // Repair одного оружия (RPh): dr ≤ repairNumber → repaired; dr === 6 → permanent elimination; иначе fail.
+    rollRepairAttempt(weapon) {
+        const dr = _rollD6_();
+        if (dr === 6)                  return { result: 'eliminated', dr };
+        if (dr <= weapon.repairNumber) return { result: 'repaired',   dr };
+        return { result: 'fail', dr };
+    },
+
+    // Rally (self или unit): dr + selfPenalty (1 для self-rally, 0 для unit-rally) + 4 (DM)
+    // + (-1 если woods/building) + leaderDRM (0 для self-rally).
+    // Pass если итог ≤ brokenMorale. Original dr === 12 → CR (обрабатывает caller).
+    rollRallyAttempt(unit, { selfPenalty = 0, leaderDRM = 0, kind = 'Rally' } = {}) {
+        const dr = roll2d6();
+        const terrain = terrainAt(unit.hex.col, unit.hex.row);
+        const inCover = terrain.includes('forest') || terrain.includes('woodenBuilding') || terrain.includes('stoneBuilding');
+        const drmDM      = unit.desperationMorale ? 4 : 0;
+        const drmTerrain = inCover ? -1 : 0;
+        const final = dr + selfPenalty + drmDM + drmTerrain + leaderDRM;
+        const pass  = final <= unit.brokenMorale;
+        console.log(`[${kind}] ${unit.id}: dr=${dr}${selfPenalty?`+${selfPenalty}self`:''}${drmDM?`+${drmDM}DM`:''}${drmTerrain?`${drmTerrain}cover`:''}${leaderDRM?`${leaderDRM>0?'+':''}${leaderDRM}leader`:''}=${final} vs brokenMorale=${unit.brokenMorale} → ${pass?'rallied':'fail'}`);
+        return { pass, originalTwelve: dr === 12 };
+    },
+
+    calcLeadershipDRM,
 
     checkPlaceSmokeCapability(id, units, mg = null) {
         const u = units[id];

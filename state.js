@@ -31,6 +31,16 @@ export const State = {
     ccDefenderDeclaring: false,        // true когда StartDefenderCC нажат
     ambushSide: null,                  // 'attacker' | 'defender' | null — сторона получившая ambush
     ccAmbushRound: null,               // 'round 1' | 'round 2' | null — раунд ambush-резолва
+    rallySide: null,                   // 'attacker' | 'defender' | null — чья сейчас полу-фаза RPh
+    rallySubPhase: null,               // 'recovery' | 'transfer' | null — текущая под-фаза RPh
+    transferHex: null,                 // hex с открытой transfer-панелью (RPh)
+    idTransferSelectedUnit: null,      // id оружия выбранного для transfer
+    idUnitToGetWeapon: null,           // id пехоты — получатель weapon'а
+    recoveryHex: null,                 // hex выбранный для Recovery Attempt (RPh)
+    repairHex: null,                   // hex выбранный для Repair Attempt (RPh)
+    attackerExtraMMCUsed: false,       // attacker уже использовал бонусную попытку на non-selfRally MMC
+    selfRallyUnit: null,               // выбранный юнит для SelfRallyAttempt
+    unitRallyUnit: null,               // выбранный юнит для UnitRallyAttempt
 
     // массив подписчиков (Positioning, Renderer и т.д.)
     subscribers: [],

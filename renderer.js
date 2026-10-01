@@ -1,15 +1,17 @@
 import { State } from './state.js';
 
 // Анимация флипа юнита на broken-сторону
-function flipRendering(node, unit) {
+// Флип юнита на broken-сторону (toBroken=true) или обратно (toBroken=false — после repair).
+function flipRendering(node, unit, toBroken = true) {
     const x0 = unit.x;                // стабильная target-позиция из state — защищает от race с pos-tween
     const w  = node.findOne('Image').width();
     const cx = x0 + w / 2;
+    const targetImage = toBroken ? unit.brokenImage : unit.image;
 
     node.to({
         x: cx, scaleX: 0, duration: 0.15,
         onFinish: () => {
-            if (unit.brokenImage) node.findOne('Image').image(unit.brokenImage);
+            if (targetImage) node.findOne('Image').image(targetImage);
             node.to({ x: x0, scaleX: 1, duration: 0.15 });
         }
     });
@@ -129,6 +131,39 @@ export function initRenderer() {
             if (value) node.moveToTop();
         }
 
+        // Юнит/оружие выбраны в transfer-панели (RPh) — та же красная рамка.
+        if (key === 'transferSelected') {
+            node.findOne('.selectRect').visible(!!value);
+            if (value) node.moveToTop();
+        }
+
+        // Weapon в eligible-hex для Recovery (RPh) — красная рамка на оружии.
+        if (key === 'recoveryHighlight') {
+            node.findOne('.recoveryRect').visible(!!value);
+        }
+
+        // Юнит eligible для Self-Rally (RPh) — та же красная рамка recoveryRect.
+        if (key === 'selfRallyHighlight') {
+            node.findOne('.recoveryRect').visible(!!value);
+        }
+
+        // Юнит выбран для self-rally attempt — красная рамка selectRect (фокус).
+        if (key === 'selfRallySelected') {
+            node.findOne('.selectRect').visible(!!value);
+            if (value) node.moveToTop();
+        }
+
+        // Юнит eligible для Unit-Rally (RPh) — та же красная рамка recoveryRect.
+        if (key === 'unitRallyHighlight') {
+            node.findOne('.recoveryRect').visible(!!value);
+        }
+
+        // Юнит выбран для unit-rally attempt — selectRect.
+        if (key === 'unitRallySelected') {
+            node.findOne('.selectRect').visible(!!value);
+            if (value) node.moveToTop();
+        }
+
         // KIA — временный визуал перед удалением юнита.
         if (key === 'kia') {
             node.findOne('.kiaText').visible(value);
@@ -151,9 +186,9 @@ export function initRenderer() {
             node.findOne('.ffBigText').visible(value === 'FinalFire');
         }
 
-        // broken — флип на broken-сторону
-        if (key === 'broken' && value === true) {
-            flipRendering(node, State.units[id]);
+        // broken — флип на broken-сторону (true) или обратно после repair (false).
+        if (key === 'broken') {
+            flipRendering(node, State.units[id], value === true);
         }
 
         // Prep Fire marker — юнит отстрелялся в PFPh, движение в MPh заблокировано

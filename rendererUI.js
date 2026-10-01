@@ -62,6 +62,9 @@ export const RendererUI = {
             if (action === 'showCCPanel')       RendererUI.drawCCPanel(data.units);
             if (action === 'hideCCPanel')       RendererUI.removeCCPanel();
             if (action === 'setCCPanelSelect')  RendererUI.updateCCPanelSelect(data.selectedIds);
+            if (action === 'showTransferPanel')     RendererUI.drawTransferPanel(data.units);
+            if (action === 'hideTransferPanel')     RendererUI.removeTransferPanel();
+            if (action === 'setTransferPanelSelect') RendererUI.updateTransferPanelSelect(data.selectedIds);
         });
 
         // первичная отрисовка уже добавленных кнопок
@@ -309,6 +312,66 @@ export const RendererUI = {
 
     removeCCPanel() {
         const panel = uiLayer?.findOne('.ccPanel');
+        if (panel) { panel.destroy(); uiLayer.batchDraw(); }
+    },
+
+    // Панель для transfer weapons (RPh): аналог CC-панели, но attr transferPanel.
+    drawTransferPanel(units) {
+        RendererUI.removeTransferPanel();
+        if (!units.length) return;
+
+        const first = units[0].image;
+        const uw = first.width;
+        const uh = first.height;
+        const gap = 4;
+        const totalH = units.length * (uh + gap) - gap;
+        const stage = uiLayer.getStage();
+        const panelX = stage.width() - uw - 24;
+        const panelY = 60;
+
+        const panel = new Konva.Group({ x: panelX, y: panelY, name: 'transferPanel' });
+        panel.add(new Konva.Rect({
+            x: -8, y: -8, width: uw + 16, height: totalH + 16,
+            fill: 'rgba(0,0,0,0.7)', cornerRadius: 4,
+        }));
+
+        units.forEach((u, i) => {
+            const y = i * (uh + gap);
+            const row = new Konva.Group({ x: 0, y, name: 'transferPanelRow' });
+            row.setAttr('transferPanel', true);
+            row.setAttr('unitId', u.id);
+            const image = new Konva.Image({ image: u.image, x: 0, y: 0, width: uw, height: uh });
+            image.setAttr('unitId', u.id);
+            const selRect = new Konva.Rect({
+                x: 0, y: 0, width: uw, height: uh,
+                stroke: 'red', strokeWidth: 1,
+                visible: false,
+                name: `transferPanelSelect-${u.id}`,
+                listening: false,
+            });
+            row.add(image, selRect);
+            panel.add(row);
+        });
+
+        uiLayer.add(panel);
+        uiLayer.batchDraw();
+    },
+
+    updateTransferPanelSelect(selectedIds) {
+        const panel = uiLayer?.findOne('.transferPanel');
+        if (!panel) return;
+        const set = new Set(selectedIds);
+        panel.find('Rect').forEach(r => {
+            const name = r.name() || '';
+            if (!name.startsWith('transferPanelSelect-')) return;
+            const uid = name.slice('transferPanelSelect-'.length);
+            r.visible(set.has(uid));
+        });
+        uiLayer.batchDraw();
+    },
+
+    removeTransferPanel() {
+        const panel = uiLayer?.findOne('.transferPanel');
         if (panel) { panel.destroy(); uiLayer.batchDraw(); }
     },
 
