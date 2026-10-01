@@ -164,6 +164,11 @@ export function initRenderer() {
             if (value) node.moveToTop();
         }
 
+        // Юнит eligible для DM-removal opt (RPh step h) — красная рамка recoveryRect.
+        if (key === 'dmRemovalHighlight') {
+            node.findOne('.recoveryRect').visible(!!value);
+        }
+
         // KIA — временный визуал перед удалением юнита.
         if (key === 'kia') {
             node.findOne('.kiaText').visible(value);

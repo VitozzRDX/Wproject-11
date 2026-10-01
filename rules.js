@@ -1786,6 +1786,15 @@ export const Rules = {
             console.log(`[move] overstack в target hex (макс 3 squads / 4 leaders)`);
             return null;
         }
+        // Запрет входа в hex с вражеской infantry (не Melee в MPh). Оружие на земле не считается.
+        const movingSide = ctx.units[ctx.movementGroup[0]].side;
+        const enemyInfantryInTarget = Object.values(ctx.units).some(u =>
+            u.category === 'infantry' && u.side !== movingSide && isSameHex(u.hex, ctx.targetHex)
+        );
+        if (enemyInfantryInTarget) {
+            console.log(`[move] blocked: enemy infantry в target hex (${ctx.targetHex.col},${ctx.targetHex.row})`);
+            return null;
+        }
 
         const overrideTerrain = ctx.overrideTerrain || null;
 

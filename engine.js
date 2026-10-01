@@ -8,6 +8,7 @@ import { spawn_unit } from './unitloading.js';
 import { getLastHit } from './terrainLOS.js';
 import { flipReplaceUnit, raiseToTop } from './renderer.js';
 import { recalculateHex } from './positioning.js';
+import { save, load } from './saveLoad.js';
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
@@ -29,6 +30,9 @@ const handlers = {
     addToFireGroup: (ctx) => {
         _addToFireGroup(ctx.unitId);
     },
+
+    Save: () => save(),
+    Load: async () => { await load(); },
 
     MOVE: (ctx) => {
 
@@ -96,6 +100,12 @@ const handlers = {
             UIState.removeButton('Drop');
             UIState.removeButton('Recover');
 
+            return;
+        }
+        // APh: сбросить выбранного для advance.
+        if (State.advanceSelected) {
+            State.setUnit(State.advanceSelected, 'selectedForAdvance', false);
+            State.advanceSelected = null;
             return;
         }
     },
@@ -330,13 +340,11 @@ const handlers = {
     },
 
     EndAttackerRecovery: () => {
-        // Attacker закончил Recovery → defender начинает. Сброс выбора + пересчёт highlights под defender'а.
+        // Attacker закончил → defender. Если defender'у нечего рекаверить — auto-skip через _enterRecoveryForCurrentSide.
         State.rallySide = 'defender';
         _clearRecoveryState();
-        _refreshRecoveryHighlights();
         UIState.removeButton('EndAttackerRecovery');
-        UIState.addButton('EndDefenderRecovery', { x: 20, y: 100, label: 'EndDefenderRecovery' });
-        console.log('[RPh] defender recovery starts');
+        _enterRecoveryForCurrentSide();
     },
 
     EndDefenderRecovery: () => {
@@ -408,6 +416,7 @@ const handlers = {
         }
         _clearRepairState();
         _refreshRepairHighlights();
+        _autoEndRepairIfNoneLeft();
     },
 
     SelectRecoveryHex: (ctx) => {
@@ -452,6 +461,7 @@ const handlers = {
         if (!recovered) console.log(`[Recovery] all units failed in hex (${State.recoveryHex.col},${State.recoveryHex.row})`);
         _clearRecoveryState();
         _refreshRecoveryHighlights();
+        _autoEndRecoveryIfNoneLeft();
     },
 
     EndAttackerTransfer: () => {
@@ -512,11 +522,18 @@ const handlers = {
     },
 
     EndDefenderUnitRally: () => {
-        // Обе стороны прошли Unit-Rally → RPh закончена, следующая фаза.
+        // Обе стороны прошли Unit-Rally → переход в DM-removal подфазу (step h правил).
         _clearAllUnitRallyHighlights();
         _clearUnitRallyState();
         UIState.removeButton('EndDefenderUnitRally');
-        handlers.NextPhase();
+        _enterDMRemoval();
+    },
+
+    ToggleKeepDM: (ctx) => {
+        // Клик по подсвеченному DM-юниту: снимаем подсветку и помечаем "оставить DM".
+        State.setUnit(ctx.unitId, 'dmRemovalHighlight', false);
+        State.setUnit(ctx.unitId, 'DMkept', true);
+        console.log(`[RPh DM] ${ctx.unitId} opt-keep DM`);
     },
 
     SelectUnitRallyUnit: (ctx) => {
@@ -659,6 +676,22 @@ const handlers = {
 
         // Конец RPh: полный cleanup — recovery + transfer state, все кнопки RPh, action-флаги юнитов.
         if (prevPhase === 'rally') {
+            // DM-Removal финализация (step h): убираем DM у всех, кроме adjacent-врагу и явно оставленных игроком.
+            for (const u of Object.values(State.units)) {
+                if (!u.desperationMorale) continue;
+                const adjacentEnemy = Object.values(State.units).some(e =>
+                    e.category === 'infantry' && e.side !== u.side && isAdjacent(u.hex, e.hex)
+                );
+                if (adjacentEnemy) continue;
+                if (u.DMkept) continue;
+                State.setUnit(u.id, 'desperationMorale', false);
+                console.log(`[RPh DM] ${u.id} DM removed`);
+            }
+            for (const u of Object.values(State.units)) {
+                if (u.dmRemovalHighlight) State.setUnit(u.id, 'dmRemovalHighlight', false);
+                if (u.DMkept)             State.setUnit(u.id, 'DMkept', false);
+            }
+
             State.rallySide = null;
             State.rallySubPhase = null;
             State.transferHex = null;
@@ -790,9 +823,7 @@ const handlers = {
         if (p === 'rally') {
             State.rallySide = 'attacker';
             State.rallySubPhase = 'recovery';
-            _refreshRecoveryHighlights();
-            UIState.addButton('EndAttackerRecovery', { x: 20, y: 100, label: 'EndAttackerRecovery' });
-            console.log('[RPh] attacker recovery starts');
+            _enterRecoveryForCurrentSide();
         }
 
         // Вход в APh: сбросить MF для attacker Good Order Infantry (фаза даёт свежий MF).
@@ -1156,6 +1187,29 @@ function _refreshRecoveryHighlights() {
     }
 }
 
+// Если после попытки Recovery не осталось подсвеченных weapon'ов — auto-end подфазы стороны.
+function _autoEndRecoveryIfNoneLeft() {
+    const hasAny = Object.values(State.units).some(w => w.category === 'carried' && w.recoveryHighlight);
+    if (hasAny) return;
+    if (State.rallySide === 'attacker') handlers.EndAttackerRecovery();
+    else                                 handlers.EndDefenderRecovery();
+}
+
+// Вход в Recovery подфазу для текущей стороны: highlight + auto-skip если нечего рекаверить.
+function _enterRecoveryForCurrentSide() {
+    _refreshRecoveryHighlights();
+    const hasAny = Object.values(State.units).some(w => w.category === 'carried' && w.recoveryHighlight);
+    if (!hasAny) {
+        console.log(`[RPh] ${State.rallySide} recovery: nothing to recover, auto-skip`);
+        if (State.rallySide === 'attacker') handlers.EndAttackerRecovery();
+        else                                 handlers.EndDefenderRecovery();
+        return;
+    }
+    const btn = State.rallySide === 'attacker' ? 'EndAttackerRecovery' : 'EndDefenderRecovery';
+    UIState.addButton(btn, { x: 20, y: 100, label: btn });
+    console.log(`[RPh] ${State.rallySide} recovery starts`);
+}
+
 // Полная очистка recoveryHighlight у всех weapons — при переходе из recovery-подфазы наружу.
 function _clearAllRecoveryHighlights() {
     for (const w of Object.values(State.units)) {
@@ -1227,6 +1281,27 @@ function _clearSelfRallyState() {
     }
     State.selfRallyUnit = null;
     UIState.removeButton('SelfRallyAttempt');
+}
+
+// Юнит eligible для opt-keep DM: имеет DM, не рядом с врагом, не в cover.
+function _isDMRemovalCandidate(u) {
+    if (!u.desperationMorale) return false;
+    if (u.category !== 'infantry') return false;
+    const adjacentEnemy = Object.values(State.units).some(e =>
+        e.category === 'infantry' && e.side !== u.side && isAdjacent(u.hex, e.hex)
+    );
+    if (adjacentEnemy) return false;   // adjacent врага → DM остаётся всегда
+    const terrain = terrainAt(u.hex.col, u.hex.row);
+    if (terrain.includes('forest') || terrain.includes('woodenBuilding') || terrain.includes('stoneBuilding')) return false;
+    return true;
+}
+
+// Вход в DM-removal подфазу: помечаем всех eligible юнитов, игрок кликами opt-keep'ает, NextPhase финализирует.
+function _enterDMRemoval() {
+    State.rallySubPhase = 'dmRemoval';
+    const candidates = Object.values(State.units).filter(_isDMRemovalCandidate);
+    for (const u of candidates) State.setUnit(u.id, 'dmRemovalHighlight', true);
+    console.log(`[RPh DM] ${candidates.length} units highlighted — click to keep DM, NextPhase removes rest`);
 }
 
 // Если после попытки SelfRally никого не осталось в highlight — автоматом завершаем подфазу стороны.
@@ -1302,6 +1377,14 @@ function _enterUnitRallyForCurrentSide() {
     const btn = State.rallySide === 'attacker' ? 'EndAttackerUnitRally' : 'EndDefenderUnitRally';
     UIState.addButton(btn, { x: 20, y: 100, label: btn });
     console.log(`[RPh] ${State.rallySide} unit-rally starts`);
+}
+
+// Если после попытки Repair не осталось подсвеченных weapon'ов — auto-end подфазы стороны.
+function _autoEndRepairIfNoneLeft() {
+    const hasAny = Object.values(State.units).some(w => w.category === 'carried' && w.recoveryHighlight);
+    if (hasAny) return;
+    if (State.rallySide === 'attacker') handlers.EndAttackerRepair();
+    else                                 handlers.EndDefenderRepair();
 }
 
 // Вход в Repair-подфазу для текущей rallySide: подсвечиваем eligible-weapons.

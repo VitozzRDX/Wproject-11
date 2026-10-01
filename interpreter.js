@@ -50,6 +50,14 @@ const RULES = [
         name: 'NextPhase'
     },
     {
+        requiresAny: [{ leftClick: c => c.button !== 2, clickedBtn: c => c.buttonLabel === 'Save' }],
+        name: 'Save'
+    },
+    {
+        requiresAny: [{ leftClick: c => c.button !== 2, clickedBtn: c => c.buttonLabel === 'Load' }],
+        name: 'Load'
+    },
+    {
         requiresAny: [
             { isButton: ctx => ctx.buttonLabel === 'DoubleTime' }
         ],
@@ -332,13 +340,15 @@ const RULES = [
         }],
         name: 'RoutMove'
     },
-    // APh: клик по attacker юниту → toggle select для advance (engine делает проверки eligibility).
+    // APh: клик по attacker юниту → выбрать для advance. Срабатывает только когда ничего не выбрано
+    // (чтобы при уже выбранном юните клик по хексу/другому юниту шёл в Advance; переключение — через Escape).
     {
         requiresAny: [{
-            phaseIsAdvance: ()  => PhaseManager.getPhase() === 'advance',
-            leftClick:      ctx => ctx.button !== 2,
-            hasUnit:        ctx => ctx.unitId !== undefined,
-            ownSide:        ctx => State.units[ctx.unitId].side === 'attacker',
+            phaseIsAdvance:   ()  => PhaseManager.getPhase() === 'advance',
+            leftClick:        ctx => ctx.button !== 2,
+            hasUnit:          ctx => ctx.unitId !== undefined,
+            ownSide:          ctx => State.units[ctx.unitId].side === 'attacker',
+            nothingSelected:  ()  => State.advanceSelected === null,
         }],
         name: 'SelectForAdvance'
     },
@@ -557,6 +567,18 @@ const RULES = [
             isHighlighted:       ctx => State.units[ctx.unitId]?.unitRallyHighlight,
         }],
         name: 'SelectUnitRallyUnit'
+    },
+
+    // RPh DM-Removal: клик по подсвеченному DM-юниту → opt-keep (DM остаётся).
+    {
+        requiresAny: [{
+            phaseIsRally:        () => PhaseManager.getPhase() === 'rally',
+            subPhaseIsDmRemoval: () => State.rallySubPhase === 'dmRemoval',
+            leftClick:           ctx => ctx.button !== 2,
+            hasUnit:             ctx => ctx.unitId !== undefined,
+            isHighlighted:       ctx => State.units[ctx.unitId]?.dmRemovalHighlight,
+        }],
+        name: 'ToggleKeepDM'
     },
 
 ]

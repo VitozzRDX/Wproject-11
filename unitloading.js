@@ -42,7 +42,9 @@ const Infantry         = { ...Unit, category: 'infantry',
                                     selfRallySelected: false,  // юнит выбран для SelfRallyAttempt (selectRect)
                                     unitRallyAttempted: false, // юнит уже пытался unit-rally в этом RPh
                                     unitRallyHighlight: false, // подсветка eligible для unit-rally (recoveryRect)
-                                    unitRallySelected: false }; // юнит выбран для UnitRallyAttempt (selectRect)
+                                    unitRallySelected: false,  // юнит выбран для UnitRallyAttempt (selectRect)
+                                    dmRemovalHighlight: false, // подсветка — DM будет снят на NextPhase (RPh step h)
+                                    DMkept: false };           // игрок кликнул по подсвеченному → DM остаётся
 const Squad            = { ...Infantry, type: 'squad', mf: 4, leaderBonus: 2, firingStatus: ' ', ipc: 3 };   // MMC
 const Leader           = { ...Infantry, type: 'leader', mf: 6, quality: 'Elite', ipc: 1 };                    // SMC
 const GermanSquad_1st   = { ...Squad,  nation: 'german',   quality: '1stLine' };
@@ -415,6 +417,7 @@ export async function createAndLoadUnits(layer, scenarioUnits) {
         const template = {
             ...tmpl,
             id: record.id,
+            templateId: record.templateId,   // имя шаблона на самом юните — нужно для save/load чтобы пересоздать того же типа
             side: record.side,   // 'attacker' | 'defender' — из сценария
             hex: resolvedHex,
             path: [{ hex: resolvedHex, isRoad: Rules._isRoadHex(resolvedHex) }],
@@ -461,7 +464,7 @@ export async function createAndLoadUnits(layer, scenarioUnits) {
 
 // Создать юнит из шаблона в указанном гексе — для замены на HS и т.п.
 export async function spawn_unit(templateId, id, hex, layer, side = null) {
-    const template = { ...TEMPLATES[templateId], id, hex, side,
+    const template = { ...TEMPLATES[templateId], id, templateId, hex, side,
                        path: [{ hex, isRoad: Rules._isRoadHex(hex) }],
                        baseMF: TEMPLATES[templateId].mf };
     template.elr   = template.lowerQuality ? (State.elr[template.nation] ?? 3) : 20;

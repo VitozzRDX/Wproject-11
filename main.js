@@ -12,6 +12,7 @@ import { hexToPixel, pixelToHex, COL_COUNT, ROW_COUNT, R, hexLabel } from './hex
 import { terrainAt, setHexMap } from './cards.js';
 import { State } from './state.js';
 import { scenarios } from './scenarios.js';
+import { save, load } from './saveLoad.js';
 
 const stage = new Konva.Stage({
     container: 'container',
@@ -84,11 +85,11 @@ async function drawCardVisuals(layer, cardVisuals) {
             overlayGroup.add(new Konva.Image({ image: img, x: 0, y: 0, listening: false }));
         }
         group.add(overlayGroup);
-        // Отдельный оверлей дорог — виден всегда, поворачивается с картой
-        if (card.roadImage) {
-            const img = await loadImage(card.roadImage);
-            group.add(new Konva.Image({ image: img, x: 0, y: 0, listening: false }));
-        }
+        // Road overlay отключён (подсветка контура дорог).
+        // if (card.roadImage) {
+        //     const img = await loadImage(card.roadImage);
+        //     group.add(new Konva.Image({ image: img, x: 0, y: 0, listening: false }));
+        // }
         layer.add(group);
     }
 }
@@ -158,6 +159,7 @@ async function loadScenario(name) {
     // 8. Юниты + первичное позиционирование (State.addUnit не триггерит subscribers,
     // поэтому проходим по уникальным хексам и вручную вызываем recalculateHex)
     unitLayer = new Konva.Layer();
+    State.unitLayer = unitLayer;   // save/load использует этот слой для spawn_unit
     await unitloading.createAndLoadUnits(unitLayer, scen.units);
     stage.add(unitLayer);
     worldFxLayer.moveToTop();   // эффекты (LoS, residual, smoke) над юнитами
@@ -173,7 +175,9 @@ async function loadScenario(name) {
     });
 
     // 8. Стандартные UI: кнопки + крутилка
-    UIState.addButton('NextPhase', { x: 10, y: 10, label: 'NextPhase' });
+    UIState.addButton('NextPhase', { x: 10,  y: 10, label: 'NextPhase' });
+    UIState.addButton('Save',      { x: 160, y: 10, label: 'Save' });
+    UIState.addButton('Load',      { x: 310, y: 10, label: 'Load' });
     UIState.addImage('turnphase', {
         src: './graf/turnphase.gif',
         x: window.innerWidth - 200, y: 20,
@@ -191,7 +195,7 @@ async function loadScenario(name) {
 }
 
 // Экспозиция в глобал для консольного управления сценарием.
-window.Game = { loadScenario };
+window.Game = { loadScenario, save, load };
 
 async function init() {
 
