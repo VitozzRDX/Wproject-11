@@ -51,6 +51,8 @@ export const RendererUI = {
             if (action === 'addImage')       RendererUI.drawImage(label, data);
             if (action === 'removeImage')    RendererUI.removeImage(label);
             if (action === 'rotateImage')    RendererUI.rotateImage(label, data.delta);
+            if (action === 'changeBadge')    RendererUI.changeBadge(data.isAxis);
+            if (action === 'fadeButton')     RendererUI.fadeButton(label);
             if (action === 'flashLOS')       RendererUI.drawLOSLine(data.from, data.to, data.color);
             if (action === 'flashHitPoints') RendererUI.drawHitPoints(data);
             if (action === 'setResidualFP')  RendererUI.drawResidualCounter(data.hex, data.fp);
@@ -451,5 +453,23 @@ export const RendererUI = {
         const node = uiLayer.findOne(`.img-${name}`);
         if (!node) return;
         node.to({ rotation: node.rotation() + delta, duration: 0.4 });
+    },
+
+    // Показывает соответствующий значок стороны (axis или allied) поверх крутилки.
+    changeBadge(isAxis) {
+        const allied = uiLayer?.findOne('.img-sideAllied');
+        const axis   = uiLayer?.findOne('.img-sideAxis');
+        allied?.visible(!isAxis);
+        axis?.visible(isAxis);
+        uiLayer?.batchDraw();
+    },
+
+    // Делает кнопку полупрозрачной и неактивной (без удаления из UIState.buttons).
+    fadeButton(label) {
+        const btn = uiLayer?.findOne(`.btn-${label}`);
+        if (!btn) return;
+        btn.opacity(0.5);
+        btn.listening(false);
+        uiLayer.batchDraw();
     },
 };

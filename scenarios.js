@@ -58,6 +58,7 @@ export const scenarios = {
       { templateId: 'ge_LMG', id: 'geLMG_uAC4',  side: 'defender', possessorId: 'unit_04' },
       { templateId: 'ge_LMG', id: 'geLMG_vH2_2', side: 'defender', possessorId: 'unit_08' },
       { templateId: 'ge_LMG', id: 'geLMG_drop_44_6', side: 'defender', hex: { col: 44, row: 6 }, possessorId: null },
+      { templateId: 'ge_LMG', id: 'geLMG_drop_46_9', side: 'defender', hex: { col: 46, row: 9 }, possessorId: null },
       { templateId: 'ge_447', id: 'unit_17',           side: 'defender', hex: { col: 48, row: 3 } },
       { templateId: 'ge_LMG', id: 'geLMG_broken_48_3', side: 'defender', possessorId: 'unit_17', state: { broken: true } },
       { templateId: 'ge_LMG', id: 'geLMG_broken_43_10',side: 'defender', possessorId: 'unit_12', state: { broken: true } },

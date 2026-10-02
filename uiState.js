@@ -29,6 +29,16 @@ export const UIState = {
         this.subscribers.forEach(sub => sub('rotateImage', name, { delta }));
     },
 
+    // Переключение значка стороны (Axis / Allied) поверх крутилки турнфазы.
+    changeBadge(isAxis) {
+        this.subscribers.forEach(sub => sub('changeBadge', null, { isAxis }));
+    },
+
+    // Делает кнопку полупрозрачной и неактивной (без удаления).
+    fadeButton(label) {
+        this.subscribers.forEach(sub => sub('fadeButton', label));
+    },
+
     subscribe(handler) {
         this.subscribers.push(handler);
     },

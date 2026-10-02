@@ -102,6 +102,14 @@ let unitLayer = null;
 let uiLayer = null;         // screen-fixed: кнопки + крутилка
 let worldFxLayer = null;    // world-anchored: LoS, residual, smoke, hit points
 
+// Определяет сторону attacker'а (axis/allied) по нации любого attacker-пехотинца и переключает значок.
+const AXIS_NATIONS = new Set(['german', 'italian', 'japanese']);
+function _refreshSideBadge() {
+    const attackerUnit = Object.values(State.units).find(u => u.side === 'attacker' && u.category === 'infantry');
+    const isAxis = AXIS_NATIONS.has(attackerUnit?.nation);
+    UIState.changeBadge(isAxis);
+}
+
 // Загрузка сценария: полная перезагрузка карты, юнитов, параметров.
 // Вызывается при старте (init) и из консоли (window.Game.loadScenario('B')).
 async function loadScenario(name) {
@@ -184,6 +192,21 @@ async function loadScenario(name) {
         opacity: 0.5,
         scale: 0.8,
     });
+    // Два значка стороны поверх крутилки — показываем один из них через changeBadge.
+    // Сдвиг +30/+30 — ручная подгонка центра относительно turnphase (разные размеры картинок).
+    UIState.addImage('sideAllied', {
+        src: './graf/turnphaseallied.gif',
+        x: window.innerWidth - 200 + 35, y: 20 + 35,
+        opacity: 0.5, scale: 0.8,
+    });
+    UIState.addImage('sideAxis', {
+        src: './graf/turnphaseaxis.gif',
+        x: window.innerWidth - 200 + 24, y: 20 + 24,
+        opacity: 0.5, scale: 0.8,
+    });
+    // addImage асинхронно грузит картинки (await loadImage). Ждём чтобы ноды успели создаться,
+    // иначе changeBadge не найдёт их и оба баджа останутся видимыми.
+    setTimeout(_refreshSideBadge, 50);
 
     // 9. Камера + компенсация uiLayer (UI остаётся на месте при скролле)
     stage.x(scen.initialCamera?.x ?? 0);

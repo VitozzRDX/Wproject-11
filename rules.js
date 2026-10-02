@@ -1223,6 +1223,7 @@ function _check_separate_attack(targets, firegroupUnits, firedFromRecord) {
             }
         }
     }
+    
     return false;
 }
 

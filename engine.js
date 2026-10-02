@@ -343,7 +343,7 @@ const handlers = {
         // Attacker закончил → defender. Если defender'у нечего рекаверить — auto-skip через _enterRecoveryForCurrentSide.
         State.rallySide = 'defender';
         _clearRecoveryState();
-        UIState.removeButton('EndAttackerRecovery');
+        UIState.fadeButton('EndAttackerRecovery');
         _enterRecoveryForCurrentSide();
     },
 
@@ -353,7 +353,7 @@ const handlers = {
         _clearRecoveryState();
         State.rallySubPhase = 'repair';
         State.rallySide = 'attacker';
-        UIState.removeButton('EndDefenderRecovery');
+        UIState.fadeButton('EndDefenderRecovery');
         _enterRepairForCurrentSide();
     },
 
@@ -362,7 +362,7 @@ const handlers = {
         State.rallySide = 'defender';
         _clearRepairState();
         _clearAllRecoveryHighlights();   // снять подсветку старых eligible-weapons attacker'а
-        UIState.removeButton('EndAttackerRepair');
+        UIState.fadeButton('EndAttackerRepair');
         _enterRepairForCurrentSide();
     },
 
@@ -372,8 +372,8 @@ const handlers = {
         _clearRepairState();
         State.rallySubPhase = 'transfer';
         State.rallySide = 'attacker';
-        UIState.removeButton('EndDefenderRepair');
-        UIState.addButton('EndAttackerTransfer', { x: 20, y: 100, label: 'EndAttackerTransfer' });
+        UIState.fadeButton('EndDefenderRepair');
+        UIState.addButton('EndAttackerTransfer', { x: 10, y: 200, label: 'EndAttackerTransfer' });
         console.log('[RPh] attacker transfer starts');
     },
 
@@ -385,7 +385,7 @@ const handlers = {
         );
         if (!hasEligible) return;
         State.repairHex = hex;
-        UIState.addButton('RepairAttempt', { x: 20, y: 180, label: 'RepairAttempt' });
+        UIState.addButton('RepairAttempt', { x: 310, y: 150, label: 'RepairAttempt' });
         console.log(`[Repair] hex (${hex.col},${hex.row}) selected`);
     },
 
@@ -427,7 +427,7 @@ const handlers = {
         );
         if (!hasEligible) return;
         State.recoveryHex = hex;
-        UIState.addButton('RecoveryAttempt', { x: 20, y: 180, label: 'RecoveryAttempt' });
+        UIState.addButton('RecoveryAttempt', { x: 310, y: 100, label: 'RecoveryAttempt' });
         console.log(`[Recovery] hex (${hex.col},${hex.row}) selected`);
     },
 
@@ -470,8 +470,8 @@ const handlers = {
         State.transferHex = null;
         _clearTransferSelection();
         UIState.hideTransferPanel();
-        UIState.removeButton('EndAttackerTransfer');
-        UIState.addButton('EndDefenderTransfer', { x: 20, y: 100, label: 'EndDefenderTransfer' });
+        UIState.fadeButton('EndAttackerTransfer');
+        UIState.addButton('EndDefenderTransfer', { x: 160, y: 200, label: 'EndDefenderTransfer' });
         console.log('[RPh] defender transfer starts');
     },
 
@@ -482,7 +482,7 @@ const handlers = {
         UIState.hideTransferPanel();
         State.rallySubPhase = 'selfRally';
         State.rallySide = 'attacker';
-        UIState.removeButton('EndDefenderTransfer');
+        UIState.fadeButton('EndDefenderTransfer');
         _enterSelfRallyForCurrentSide();
     },
 
@@ -491,7 +491,7 @@ const handlers = {
         State.rallySide = 'defender';
         _clearSelfRallyState();
         _clearAllSelfRallyHighlights();
-        UIState.removeButton('EndAttackerSelfRally');
+        UIState.fadeButton('EndAttackerSelfRally');
         _enterSelfRallyForCurrentSide();
     },
 
@@ -499,7 +499,7 @@ const handlers = {
         // Обе стороны прошли Self-Rally → переход в Unit-Rally подфазу.
         _clearAllSelfRallyHighlights();
         _clearSelfRallyState();
-        UIState.removeButton('EndDefenderSelfRally');
+        UIState.fadeButton('EndDefenderSelfRally');
         State.rallySubPhase = 'unitRally';
         State.rallySide = 'attacker';
         _enterUnitRallyForCurrentSide();
@@ -510,14 +510,14 @@ const handlers = {
         if (State.selfRallyUnit) State.setUnit(State.selfRallyUnit, 'selfRallySelected', false);
         State.selfRallyUnit = ctx.unitId;
         State.setUnit(ctx.unitId, 'selfRallySelected', true);
-        UIState.addButton('SelfRallyAttempt', { x: 20, y: 180, label: 'SelfRallyAttempt' });
+        UIState.addButton('SelfRallyAttempt', { x: 310, y: 250, label: 'SelfRallyAttempt' });
     },
 
     EndAttackerUnitRally: () => {
         State.rallySide = 'defender';
         _clearUnitRallyState();
         _clearAllUnitRallyHighlights();
-        UIState.removeButton('EndAttackerUnitRally');
+        UIState.fadeButton('EndAttackerUnitRally');
         _enterUnitRallyForCurrentSide();
     },
 
@@ -525,7 +525,7 @@ const handlers = {
         // Обе стороны прошли Unit-Rally → переход в DM-removal подфазу (step h правил).
         _clearAllUnitRallyHighlights();
         _clearUnitRallyState();
-        UIState.removeButton('EndDefenderUnitRally');
+        UIState.fadeButton('EndDefenderUnitRally');
         _enterDMRemoval();
     },
 
@@ -540,7 +540,7 @@ const handlers = {
         if (State.unitRallyUnit) State.setUnit(State.unitRallyUnit, 'unitRallySelected', false);
         State.unitRallyUnit = ctx.unitId;
         State.setUnit(ctx.unitId, 'unitRallySelected', true);
-        UIState.addButton('UnitRallyAttempt', { x: 20, y: 180, label: 'UnitRallyAttempt' });
+        UIState.addButton('UnitRallyAttempt', { x: 310, y: 300, label: 'UnitRallyAttempt' });
     },
 
     UnitRallyAttempt: async () => {
@@ -752,6 +752,16 @@ const handlers = {
             }
             State.residualFP = {};
             console.log('[MPh end] cleared Residual FP counters');
+
+            // Очистить movementGroup / movementStackHex — иначе правило MOVE (у него нет phase-check)
+            // срабатывает в следующих фазах при любом клике по гексу/кнопке.
+            for (const id of State.movementGroup) _setInMovementGroup(id, false);
+            State.movementGroup = [];
+            State.movementStackHex = null;
+            State.moved_movement_group = null;
+            State.original_group = [];
+            State.splitted_group = [];
+            State.mfspent = false;
         }
 
         // Правило DFPh: убрать все First/Final Fire counters в конце фазы.
@@ -816,6 +826,10 @@ const handlers = {
                 State.setUnit(u.id, 'side', u.side === 'attacker' ? 'defender' : 'attacker');
             }
             console.log('[Turn] sides swapped: attacker ↔ defender');
+            // Переключить значок стороны по нации нового attacker'а.
+            const AXIS = new Set(['german', 'italian', 'japanese']);
+            const attackerUnit = Object.values(State.units).find(u => u.side === 'attacker' && u.category === 'infantry');
+            UIState.changeBadge(AXIS.has(attackerUnit?.nation));
         }
 
         // Вход в RPh: старт Recovery-подфазы у attacker'а. Подсветить eligible weapons на карте.
@@ -1198,6 +1212,10 @@ function _autoEndRecoveryIfNoneLeft() {
 // Вход в Recovery подфазу для текущей стороны: highlight + auto-skip если нечего рекаверить.
 function _enterRecoveryForCurrentSide() {
     _refreshRecoveryHighlights();
+    // Кнопку рисуем всегда — чтобы при auto-skip она тоже отобразилась (сразу faded).
+    const btn = State.rallySide === 'attacker' ? 'EndAttackerRecovery' : 'EndDefenderRecovery';
+    const x = State.rallySide === 'attacker' ? 10 : 160;   // attacker под NextPhase, defender под Save
+    UIState.addButton(btn, { x, y: 100, label: btn });
     const hasAny = Object.values(State.units).some(w => w.category === 'carried' && w.recoveryHighlight);
     if (!hasAny) {
         console.log(`[RPh] ${State.rallySide} recovery: nothing to recover, auto-skip`);
@@ -1205,8 +1223,6 @@ function _enterRecoveryForCurrentSide() {
         else                                 handlers.EndDefenderRecovery();
         return;
     }
-    const btn = State.rallySide === 'attacker' ? 'EndAttackerRecovery' : 'EndDefenderRecovery';
-    UIState.addButton(btn, { x: 20, y: 100, label: btn });
     console.log(`[RPh] ${State.rallySide} recovery starts`);
 }
 
@@ -1315,6 +1331,10 @@ function _autoEndSelfRallyIfNoneLeft() {
 // Вход в Self-Rally подфазу: highlight + auto-skip если некого раллить.
 function _enterSelfRallyForCurrentSide() {
     _refreshSelfRallyHighlights();
+    // Кнопку рисуем всегда — чтобы при auto-skip она тоже отобразилась (сразу faded).
+    const btn = State.rallySide === 'attacker' ? 'EndAttackerSelfRally' : 'EndDefenderSelfRally';
+    const x = State.rallySide === 'attacker' ? 10 : 160;
+    UIState.addButton(btn, { x, y: 250, label: btn });
     const hasAny = Object.values(State.units).some(u => u.category === 'infantry' && u.selfRallyHighlight);
     if (!hasAny) {
         console.log(`[RPh] ${State.rallySide} self-rally: nothing to rally, auto-skip`);
@@ -1322,8 +1342,6 @@ function _enterSelfRallyForCurrentSide() {
         else                                 handlers.EndDefenderSelfRally();
         return;
     }
-    const btn = State.rallySide === 'attacker' ? 'EndAttackerSelfRally' : 'EndDefenderSelfRally';
-    UIState.addButton(btn, { x: 20, y: 100, label: btn });
     console.log(`[RPh] ${State.rallySide} self-rally starts`);
 }
 
@@ -1367,6 +1385,10 @@ function _clearUnitRallyState() {
 // Вход в Unit-Rally подфазу: highlight + auto-skip если некого раллить.
 function _enterUnitRallyForCurrentSide() {
     _refreshUnitRallyHighlights();
+    // Кнопку рисуем всегда — чтобы при auto-skip она тоже отобразилась (сразу faded).
+    const btn = State.rallySide === 'attacker' ? 'EndAttackerUnitRally' : 'EndDefenderUnitRally';
+    const x = State.rallySide === 'attacker' ? 10 : 160;
+    UIState.addButton(btn, { x, y: 300, label: btn });
     const hasAny = Object.values(State.units).some(u => u.category === 'infantry' && u.unitRallyHighlight);
     if (!hasAny) {
         console.log(`[RPh] ${State.rallySide} unit-rally: nothing to rally, auto-skip`);
@@ -1374,8 +1396,6 @@ function _enterUnitRallyForCurrentSide() {
         else                                 handlers.EndDefenderUnitRally();
         return;
     }
-    const btn = State.rallySide === 'attacker' ? 'EndAttackerUnitRally' : 'EndDefenderUnitRally';
-    UIState.addButton(btn, { x: 20, y: 100, label: btn });
     console.log(`[RPh] ${State.rallySide} unit-rally starts`);
 }
 
@@ -1392,6 +1412,10 @@ function _autoEndRepairIfNoneLeft() {
 // чтобы игрок не нажимал бесполезную кнопку.
 function _enterRepairForCurrentSide() {
     _refreshRepairHighlights();
+    // Кнопку рисуем всегда — чтобы при auto-skip она тоже отобразилась (сразу faded).
+    const btn = State.rallySide === 'attacker' ? 'EndAttackerRepair' : 'EndDefenderRepair';
+    const x = State.rallySide === 'attacker' ? 10 : 160;   // attacker под EndAttackerRecovery, defender под EndDefenderRecovery
+    UIState.addButton(btn, { x, y: 150, label: btn });
     const hasAnyEligible = Object.values(State.units).some(w =>
         w.category === 'carried' && w.recoveryHighlight
     );
@@ -1401,8 +1425,6 @@ function _enterRepairForCurrentSide() {
         else                                 handlers.EndDefenderRepair();
         return;
     }
-    const btn = State.rallySide === 'attacker' ? 'EndAttackerRepair' : 'EndDefenderRepair';
-    UIState.addButton(btn, { x: 20, y: 100, label: btn });
     console.log(`[RPh] ${State.rallySide} repair starts`);
 }
 
@@ -1675,18 +1697,23 @@ async function _handleFire(ctx) {
     const targetHex = pixelToHex(ctx.pos.x, ctx.pos.y);
     const phase = PhaseManager.getPhase();
 
+    console.log(`[Fire attempt] ${phase} → target (${targetHex.col},${targetHex.row}), fg=[${State.fireGroup.join(',')}]`);
+
     // FG объекты + accumulator для weapon RoF (заполняется в loop, читается в _set_firing_Status).
     const firegroupUnits    = State.fireGroup.map(id => State.units[id]);
     const weaponsKeepingRoF = new Set();
 
     // Отсеиваем стрелков без LoS/hindrance≥6 → validHexes. Затем bins по adjacency → subFGsArray.
     const validHexes  = Rules.filter_hexes_with_Los(State.fireGroupHexesArray, targetHex, State.orchardInSeason);
+
+    if (validHexes.length === 0) { console.log('No los from any fg unit . Firing still is pending');  }
     const subFGsArray = _form_sub_Fire_Groups(firegroupUnits, validHexes);
 
     // Визуал LoS-линий и точки блока (даже если атака abort'нется дальше).
-    console.log(`[${phase}] valid ${validHexes.length}/${State.fireGroupHexesArray.length} shooter hexes`);
+    console.log(`Из ${State.fireGroupHexesArray.length} гексовой фг ${validHexes.length} гексов имеют Лос`);
+
     _drawLOS(State.fireGroupHexesArray, targetHex, validHexes);
-    const hit = getLastHit();
+    const hit = getLastHit();   // возвращает пиксельные координаты + тип препятствия, где последний checkLOS упёрся в блокер
     UIState.flashHitPoints(hit ? [hit] : []);
 
     switch (phase) {
@@ -1694,6 +1721,7 @@ async function _handleFire(ctx) {
         // MPh — DFF: defender стреляет по двинувшимся attacker'ам.
         // ============================================================
         case 'movement': {
+            
             // Свежий список целей — двинувшиеся в hex этой MPh (движущиеся моменту).
             // Функция, а не массив: между sub-FG некоторые цели могут быть eliminated.
             const getTargets = () => _movedTargetsInHex(targetHex);
@@ -1707,6 +1735,7 @@ async function _handleFire(ctx) {
             if (!Rules.checkFPFValid(firegroupUnits, targetHex)) return;
 
             for (const subFG of subFGsArray) {
+                
                 const targets = getTargets();
                 if (targets.length === 0) break;
 
@@ -1810,6 +1839,7 @@ async function _handleFire(ctx) {
 // Разбивает FG на sub-FG по LoS + adjacency компонентам. validHexes — уже вычисленный
 // список shooter hex'ов, прошедших фильтр (LoS OK + hindrance < 6).
 function _form_sub_Fire_Groups(firegroupUnits, validHexes) {
+    
     return Rules.array_of_adjacent_Hexes_arrays(validHexes)
         .map(hexesArr => firegroupUnits.filter(u => Rules.hexInList(u.hex, hexesArr)));
 }
@@ -1874,8 +1904,9 @@ function _attackerInfantryInHex(targetHex) {
 }
 
 // Пытается положить дым в хекс. Если уже есть дым — не заменяет (MVP).
+// Ключ dynamicTerrain должен быть в формате "col-row" (с тире) — так же как в hexMap, иначе terrainAt не найдёт.
 function _place_Smoke_if_possible(hex) {
-    const hexKey = `${hex.col},${hex.row}`;
+    const hexKey = `${hex.col}-${hex.row}`;
     const existing = State.dynamicTerrain[hexKey] ?? [];
     if (existing.some(t => t === 'smoke')) return;
     State.dynamicTerrain[hexKey] = [...existing, 'smoke'];
@@ -2247,8 +2278,9 @@ function _addToMovementGroup(unitId) {
         unit   = State.units[unitId];
     }
 
-    // Если movementStackHex не установлен, записываем гекс текущего юнита
-    if (!State.movementStackHex) {
+    // Если MG пустая — msh семантически неактуален, переустанавливаем на hex текущего клика.
+    // Защита от "сироты" msh после путей, где MG опустошается без сброса msh.
+    if (!State.movementStackHex || State.movementGroup.length === 0) {
         State.movementStackHex = unit.hex;
     }
 
