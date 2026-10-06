@@ -32,6 +32,8 @@ const Infantry         = { ...Unit, category: 'infantry',
                                     kia: false,              // временный "KIA" визуал перед удалением юнита
                                     escortingRouter: null,   // id router'а которого сопровождает (для leader'а)
                                     selectedForAdvance: false, // выделен для advance-хода (APh)
+                                    selectedForSetup: false,   // выделен в setup-фазе (пул или карта)
+                                    inSetupPool: false,        // true пока юнит стоит в setup-панели (hex=null)
                                     ccSelected: false,         // выделен в CC-панели (CCPh)
                                     inMelee: false,            // Melee — CC не разрешён, гекс остаётся CC-hex
                                     transferSelected: false,   // выделен в transfer-панели (RPh)
@@ -67,7 +69,7 @@ const MG               = { ...SW, kind: 'MG' };
 // ---------------------------------------------------------------------------
 // Шаблоны — только уникальные цифры
 // ---------------------------------------------------------------------------
-const TEMPLATES = {
+export const TEMPLATES = {
   // German squads (chain: 468 → 467 → 447 → 436; 548 → 447 → 436)
   'ge_468': { ...GermanSquad_1st, quality: 'Elite',     firepower: 4, range: 6, morale: 8, brokenMorale: 8, src: './graf/ge468S.gif', brokenSrc: './graf/ge468Saeb.gif', halfSquad: 'ge_248', lowerQuality: 'ge_467' },
   'ge_548': { ...GermanSquad_1st, quality: 'Elite',     firepower: 5, range: 4, morale: 8, brokenMorale: 8, src: './graf/ge548S.gif', brokenSrc: './graf/ge468Saeb.gif', halfSquad: 'ge_238', lowerQuality: 'ge_447' },
@@ -134,13 +136,32 @@ const TEMPLATES = {
               src: './graf/amMMG.gif', brokenSrc: './graf/amMMGb.gif' },
 };
 
-function loadImage(src) {
-  return new Promise((resolve, reject) => {
-    const img = new Image();
-    img.onload  = () => resolve(img);
-    img.onerror = () => reject(new Error(`Failed to load image: ${src}`));
-    img.src = src;
-  });
+const IMAGE_CACHE = {};   // src → HTMLImageElement (готовая картинка)
+
+// Асинхронный loader с кэшем. Повторный вызов отдаёт тот же результат мгновенно.
+export function loadImage(src) {
+    if (IMAGE_CACHE[src]) return Promise.resolve(IMAGE_CACHE[src]);
+    return new Promise((resolve, reject) => {
+        const img = new Image();
+        img.onload  = () => { IMAGE_CACHE[src] = img; resolve(img); };
+        img.onerror = () => reject(new Error(`Failed to load image: ${src}`));
+        img.src = src;
+    });
+}
+
+// Синхронный геттер: возвращает уже-загруженную картинку из кэша или null.
+export function getImage(src) {
+    return IMAGE_CACHE[src] ?? null;
+}
+
+// Прогреть кэш всеми картинками TEMPLATES (src + brokenSrc). Один раз на старте.
+export function preloadAllTemplateImages() {
+    const imagePaths = [];
+    for (const tpl of Object.values(TEMPLATES)) {
+        if (tpl.src)       imagePaths.push(tpl.src);
+        if (tpl.brokenSrc) imagePaths.push(tpl.brokenSrc);
+    }
+    return Promise.all(imagePaths.map(path => loadImage(path)));
 }
 
 // ---------------------------------------------------------------------------
@@ -465,11 +486,11 @@ export async function createAndLoadUnits(layer, scenarioUnits) {
 // Создать юнит из шаблона в указанном гексе — для замены на HS и т.п.
 export async function spawn_unit(templateId, id, hex, layer, side = null) {
     const template = { ...TEMPLATES[templateId], id, templateId, hex, side,
-                       path: [{ hex, isRoad: Rules._isRoadHex(hex) }],
+                       path: hex ? [{ hex, isRoad: Rules._isRoadHex(hex) }] : [],   // пул: hex=null, path пустой
                        baseMF: TEMPLATES[templateId].mf };
     template.elr   = template.lowerQuality ? (State.elr[template.nation] ?? 3) : 20;
     const image    = await loadImage(template.src);
-    const { x, y } = hexToPixel(hex.col, hex.row);
+    const { x, y } = hex ? hexToPixel(hex.col, hex.row) : { x: 0, y: 0 };   // пул: позицию ставит setupPhase.refreshSetupPanel
     const cx       = x - image.width / 2;
     const cy       = y - image.height / 2;
     return await createUnit({ ...template, image, x: cx, y: cy }, layer);

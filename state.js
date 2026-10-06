@@ -41,6 +41,12 @@ export const State = {
     attackerExtraMMCUsed: false,       // attacker уже использовал бонусную попытку на non-selfRally MMC
     selfRallyUnit: null,               // выбранный юнит для SelfRallyAttempt
     unitRallyUnit: null,               // выбранный юнит для UnitRallyAttempt
+    currentScenario: null,             // ссылка на объект загруженного сценария (для setup и т.п.)
+    setupSide: null,                   // 'attacker' | 'defender' | null — чья очередь расставлять
+    idsInSetupPool: [],                // id юнитов, которые сейчас в setup-панели (ещё не на карте)
+    setupSelectedUnit: null,           // id единственного выбранного юнита (в панели или на карте)
+    setupDiceRolled: false,            // true если dice-roll уже выполнен для текущей стороны
+    uiLayer: null,                     // ссылка на uiLayer — нужна setupPhase для перемещения нод между слоями
 
     // массив подписчиков (Positioning, Renderer и т.д.)
     subscribers: [],

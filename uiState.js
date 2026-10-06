@@ -39,6 +39,15 @@ export const UIState = {
         this.subscribers.forEach(sub => sub('fadeButton', label));
     },
 
+    // bounds: {x, y, w, h} — rendererUI рисует Konva.Rect-подложку с этими размерами.
+    showSetupPanel(bounds) {
+        this.subscribers.forEach(sub => sub('showSetupPanel', null, { bounds }));
+    },
+
+    hideSetupPanel() {
+        this.subscribers.forEach(sub => sub('hideSetupPanel', null, {}));
+    },
+
     subscribe(handler) {
         this.subscribers.push(handler);
     },

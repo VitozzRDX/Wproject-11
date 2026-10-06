@@ -1,5 +1,6 @@
 import { UIState } from './uiState.js';
 import { hexToPixel, R } from './hexUtils.js';
+import { TEMPLATES, loadImage, getImage } from './unitloading.js';
 
 // Два слоя: uiLayer — screen-fixed (кнопки, крутилка); worldFxLayer — world-anchored (LoS, residual, smoke).
 let uiLayer;
@@ -53,6 +54,8 @@ export const RendererUI = {
             if (action === 'rotateImage')    RendererUI.rotateImage(label, data.delta);
             if (action === 'changeBadge')    RendererUI.changeBadge(data.isAxis);
             if (action === 'fadeButton')     RendererUI.fadeButton(label);
+            if (action === 'showSetupPanel') RendererUI.drawSetupPanel(data.bounds);
+            if (action === 'hideSetupPanel') RendererUI.removeSetupPanel();
             if (action === 'flashLOS')       RendererUI.drawLOSLine(data.from, data.to, data.color);
             if (action === 'flashHitPoints') RendererUI.drawHitPoints(data);
             if (action === 'setResidualFP')  RendererUI.drawResidualCounter(data.hex, data.fp);
@@ -374,6 +377,25 @@ export const RendererUI = {
 
     removeTransferPanel() {
         const panel = uiLayer?.findOne('.transferPanel');
+        if (panel) { panel.destroy(); uiLayer.batchDraw(); }
+    },
+
+    // Setup-панель = только фон-подложка (Konva.Rect). Юниты в неё не входят —
+    // они живут на uiLayer сами по себе, setupPhase позиционирует их напрямую.
+    drawSetupPanel(bounds) {   // bounds: {x, y, w, h}
+        RendererUI.removeSetupPanel();
+        const rect = new Konva.Rect({
+            x: bounds.x, y: bounds.y, width: bounds.w, height: bounds.h,
+            fill: 'rgba(0,0,0,0.7)', cornerRadius: 4,
+            name: 'setupPanel', listening: true,
+        });
+        uiLayer.add(rect);
+        rect.moveToBottom();   // чтобы юниты поверх
+        uiLayer.batchDraw();
+    },
+
+    removeSetupPanel() {
+        const panel = uiLayer?.findOne('.setupPanel');
         if (panel) { panel.destroy(); uiLayer.batchDraw(); }
     },
 

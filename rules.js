@@ -1324,7 +1324,7 @@ function isAdjacent(fromHex, targetHex) {
     return hexDistance(fromHex, targetHex) === 1;
 }
 
-function checkOverstack(targetHex, movementGroup, units) {
+export function checkOverstack(targetHex, movementGroup, units) {
     let squadCount  = 0;
     let leaderCount = 0;
 
@@ -1553,18 +1553,29 @@ function calc_road_bonus_per_unit(mg, units, result, targetHex, overrideTerrain 
 
 export const Rules = {
     checkIfAddingToMovementGroupIsValid(unit, movementStackHex, movingSide, mg, units) {
-        if (unit.pinned || unit.broken) return false;
-        if (unit.prepFired) return false;   // стрелял в PFPh → не двигается в MPh
+        if (unit.pinned)    { console.log(`Не можем двигаться этим юнитом - юнит pinned (${unit.id})`); return false; }
+        if (unit.broken)    { console.log(`Не можем двигаться этим юнитом - юнит broken (${unit.id})`); return false; }
+        if (unit.prepFired) { console.log(`Не можем двигаться этим юнитом - стрелял в PFPh (${unit.id})`); return false; }
+        if (unit.movementCompleted) { console.log(`Не можем двигаться этим юнитом - уже закончил движение в MPh (${unit.id})`); return false; }
 
         const isInSameHex = unit.hex.col === movementStackHex.col &&
                             unit.hex.row === movementStackHex.row;
-        const isMovingSide = unit.side === movingSide;
-        if (!(isInSameHex && isMovingSide)) return false;
+        if (!isInSameHex) {
+            console.log(`Не можем двигаться этим юнитом - он в (${unit.hex.col},${unit.hex.row}), а группа формируется в (${movementStackHex.col},${movementStackHex.row})`);
+            return false;
+        }
+        if (unit.side !== movingSide) {
+            console.log(`Не можем двигаться этим юнитом - чужая сторона (${unit.side}, ждём ${movingSide})`);
+            return false;
+        }
 
         // не смешиваем двинувшихся с не-двинувшимися
         if (mg && mg.length > 0) {
             const mgMoved = mg.some(id => units[id].hasStartedMoving);
-            if (mgMoved !== unit.hasStartedMoving) return false;
+            if (mgMoved !== unit.hasStartedMoving) {
+                console.log(`Не можем добавить ${unit.id} - группа уже начала движение, а этот юнит ещё нет (или наоборот)`);
+                return false;
+            }
         }
         return true;
     },
@@ -1742,6 +1753,7 @@ export const Rules = {
     _isRoadHex,
     _hasWoodsRoad,
     checkCost,
+    checkOverstack,
 
     // огонь
     fireAttack,

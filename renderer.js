@@ -125,6 +125,12 @@ export function initRenderer() {
             if (value) node.moveToTop();
         }
 
+        // Юнит выбран в setup-фазе — красная рамка (одинаковый визуал с selectedForAdvance).
+        if (key === 'selectedForSetup') {
+            node.findOne('.selectRect').visible(!!value);
+            if (value) node.moveToTop();
+        }
+
         // Юнит выбран в CC-панели — красная рамка на карте.
         if (key === 'ccSelected') {
             node.findOne('.selectRect').visible(!!value);

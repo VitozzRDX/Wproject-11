@@ -1,40 +1,40 @@
-export const scenarios = {
-  A: {
-    hexmapModule: () => import('./hexmapBaked.js').then(m => m.hexMap),
-    pixelsUrl:    './terrainPixels.json',
-    cardVisuals: [
-      { // V — правая карта, rotation 180
-        images: [
-          './graf/base_layer.png',
-          './graf/terrain_inside_1.png',
-        ],
-        overlayImages: [
-          './graf/woods_outline.png',
-          './graf/buildings_outline.png',
-          './graf/hills_outline_1.png',
-          './graf/orchard_outline_1.png',
-          './graf/brush_outline.png',
-        ],
-        roadImage: './graf/roads_outline.png',
-        x: 0, y: 0, width: 1800, height: 645, rotation: 180,
-      },
-      { // U — левая карта, rotation 0
-        images: [
-          './graf/bdu_base_layer.png',
-          './graf/bdu_terrain_inside.png',
-        ],
-        overlayImages: [
-          './graf/bdu_woods_outline.png',
-          './graf/bdu_buildings_outline.png',
-          './graf/bdu_hills_outline.png',
-          './graf/bdu_orchard_outline.png',
-          './graf/bdu_brush_outline.png',
-        ],
-        roadImage: './graf/bdu_roads_outline_1.png',
-        x: -1800, y: 0, width: 1800, height: 645, rotation: 0,
-      },
-    ],
-    units: [
+// Общие визуалы карт сценария A — переиспользуются в A и A_snapshot.
+const A_CARDVISUALS = [
+    { // V — правая карта, rotation 180
+      images: [
+        './graf/base_layer.png',
+        './graf/terrain_inside_1.png',
+      ],
+      overlayImages: [
+        './graf/woods_outline.png',
+        './graf/buildings_outline.png',
+        './graf/hills_outline_1.png',
+        './graf/orchard_outline_1.png',
+        './graf/brush_outline.png',
+      ],
+      roadImage: './graf/roads_outline.png',
+      x: 0, y: 0, width: 1800, height: 645, rotation: 180,
+    },
+    { // U — левая карта, rotation 0
+      images: [
+        './graf/bdu_base_layer.png',
+        './graf/bdu_terrain_inside.png',
+      ],
+      overlayImages: [
+        './graf/bdu_woods_outline.png',
+        './graf/bdu_buildings_outline.png',
+        './graf/bdu_hills_outline.png',
+        './graf/bdu_orchard_outline.png',
+        './graf/bdu_brush_outline.png',
+      ],
+      roadImage: './graf/bdu_roads_outline_1.png',
+      x: -1800, y: 0, width: 1800, height: 645, rotation: 0,
+    },
+];
+
+// Готовая расстановка юнитов для сценария A — сохраняется как snapshot
+// на время разработки setup-фазы (A сам будет пустым, игрок расставит через UI).
+const A_UNITS = [
       // --- German (defender) ---
       { templateId: 'ge_467', id: 'unit_01', side: 'defender', hex: { col: 38, row: 9 } },
       { templateId: 'ge_467', id: 'unit_02', side: 'defender', hex: { col: 38, row: 9 } },
@@ -86,7 +86,100 @@ export const scenarios = {
       { templateId: 'am_L81', id: 'unit_amL81', side: 'attacker', hex: { col: 48, row: 11 } },
       { templateId: 'am_L81', id: 'unit_amL81_48_5', side: 'attacker', hex: { col: 48, row: 5 } },
       { templateId: 'am_MMG', id: 'amMMG_vQ4',  side: 'attacker', possessorId: 'unit_am1' },
-    ],
+];
+
+export const scenarios = {
+  A: {
+    hexmapModule: () => import('./hexmapBaked.js').then(m => m.hexMap),
+    pixelsUrl:    './terrainPixels.json',
+    cardVisuals: A_CARDVISUALS,
+    units:       [],   // пусто — наполняется через setup-фазу
+    setup: {
+      whoSetsUpFirst: 'defender',
+      sides: {
+        // Ось: всё фиксировано, без куба.
+        defender: {
+          pool: [
+            { templateId: 'ge_467', count: 3 },
+            { templateId: 'ge_447', count: 9 },
+            { templateId: 'ge_L81', count: 1 },   // 8-1
+            { templateId: 'ge_L80', count: 1 },   // 8-0
+            { templateId: 'ge_L70', count: 1 },   // 7-0
+            { templateId: 'ge_MMG', count: 1 },
+            { templateId: 'ge_LMG', count: 3 },
+          ],
+        },
+        // Союзники: русские всегда в пуле + американцы по кубу.
+        attacker: {
+          pool: [
+            { templateId: 'so_426', count: 7 },
+            { templateId: 'so_L81', count: 1 },
+          ],
+          diceRoll: {
+            dice: 'd6',
+            outcomes: {
+              '1': [
+                { templateId: 'am_667', count: 3 },
+                { templateId: 'am_536', count: 9 },
+                { templateId: 'am_226', count: 1 },
+                { templateId: 'am_L92', count: 1 },   // 9-2
+                { templateId: 'am_L81', count: 1 },   // 8-1
+                { templateId: 'am_MMG', count: 1 },
+              ],
+              '2': [
+                { templateId: 'am_667', count: 4 },
+                { templateId: 'am_536', count: 8 },
+                { templateId: 'am_L92', count: 1 },
+                { templateId: 'am_L81', count: 1 },
+                { templateId: 'am_MMG', count: 1 },
+              ],
+              '3': [
+                { templateId: 'am_667', count: 5 },
+                { templateId: 'am_536', count: 6 },
+                { templateId: 'am_226', count: 1 },
+                { templateId: 'am_L92', count: 1 },
+                { templateId: 'am_L81', count: 1 },
+                { templateId: 'am_MMG', count: 1 },
+              ],
+              '4': [
+                { templateId: 'am_667', count: 6 },
+                { templateId: 'am_536', count: 5 },
+                { templateId: 'am_L92', count: 1 },
+                { templateId: 'am_L81', count: 1 },
+                { templateId: 'am_MMG', count: 1 },
+              ],
+              '5': [
+                { templateId: 'am_667', count: 7 },
+                { templateId: 'am_536', count: 3 },
+                { templateId: 'am_226', count: 1 },
+                { templateId: 'am_L92', count: 1 },
+                { templateId: 'am_L81', count: 1 },
+                { templateId: 'am_MMG', count: 1 },
+              ],
+              '6': [
+                { templateId: 'am_667', count: 8 },
+                { templateId: 'am_536', count: 2 },
+                { templateId: 'am_L92', count: 1 },
+                { templateId: 'am_L81', count: 1 },
+                { templateId: 'am_MMG', count: 1 },
+              ],
+            },
+          },
+        },
+      },
+    },
+    orchardInSeason: false,
+    activeRole: 'attacker',
+    initialCamera: { x: 750, y: 0 },
+    roadsUrl: './roadPixels.json',
+  },
+
+  // Snapshot: эталонная расстановка на момент до setup-фазы. Загружай через Game.loadScenario('A_snapshot').
+  A_snapshot: {
+    hexmapModule: () => import('./hexmapBaked.js').then(m => m.hexMap),
+    pixelsUrl:    './terrainPixels.json',
+    cardVisuals: A_CARDVISUALS,
+    units:       A_UNITS,
     orchardInSeason: false,
     activeRole: 'attacker',
     initialCamera: { x: 750, y: 0 },

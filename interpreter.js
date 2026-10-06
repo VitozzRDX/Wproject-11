@@ -14,12 +14,16 @@ function createContext(e) {
     const ccPanel     = e.target.getParent()?.getAttr('ccPanel') === true;
     // transferPanel — клик по элементу transfer-панели (RPh, uiLayer).
     const transferPanel = e.target.getParent()?.getAttr('transferPanel') === true;
+    // Setup: клик пришёлся в область панели — либо прямо по фону-подложке (Konva.Rect name='setupPanel'),
+    // либо по юниту, который сейчас в пуле (u.inSetupPool === true).
+    const clickedUnit = State.units[unitId];
+    const clickedSetupPanel = e.target.name?.() === 'setupPanel' || clickedUnit?.inSetupPool === true;
     // мировые координаты клика (учитываем сдвиг stage от скроллинга WASD)
     const stage       = e.target.getStage();
     const raw         = stage.getPointerPosition();
     const pos         = { x: raw.x - stage.x(), y: raw.y - stage.y() };
 
-    return { unitId, buttonLabel, button, shiftKey, pos, ccPanel, transferPanel };
+    return { unitId, buttonLabel, button, shiftKey, pos, ccPanel, transferPanel, clickedSetupPanel };
 }
 
 // ---------------------------------------------------------------------------
@@ -48,6 +52,56 @@ const RULES = [
             { isButton: ctx => ctx.buttonLabel === 'NextPhase' }
         ],
         name: 'NextPhase'
+    },
+    // Setup: кнопка RollDice (появляется у стороны с diceRoll).
+    { requiresAny: [{ leftClick: c=>c.button!==2, clickedBtn: c=>c.buttonLabel==='RollDice' }], name: 'RollDice' },
+    // Setup: кнопка EndSetupSide (появляется когда пул пустой).
+    { requiresAny: [{ leftClick: c=>c.button!==2, clickedBtn: c=>c.buttonLabel==='EndSetupSide' }], name: 'EndSetupSide' },
+    // Setup: клик по фону панели при выбранном юните на карте → вернуть в пул.
+    {
+        requiresAny: [{
+            phaseIsSetup: ()=>PhaseManager.getPhase()==='setup',
+            leftClick:    c=>c.button!==2,
+            onPanel:      c=>c.clickedSetupPanel,
+            notUnit:      c=>c.unitId === undefined,
+            hasSelOnMap:  ()=>State.setupSelectedUnit && State.units[State.setupSelectedUnit].inSetupPool === false,
+        }],
+        name: 'SetupReturnToPool'
+    },
+    // Setup: выбрано оружие + клик по своей пехоте на карте → прикрепить (установить possessorId).
+    {
+        requiresAny: [{
+            phaseIsSetup: ()=>PhaseManager.getPhase()==='setup',
+            leftClick:    c=>c.button!==2,
+            hasUnit:      c=>c.unitId !== undefined,
+            isOwnOnMap:   c=>State.units[c.unitId]?.category === 'infantry'
+                          && State.units[c.unitId]?.side === State.setupSide
+                          && State.units[c.unitId]?.hex,
+            selWeapon:    ()=>State.setupSelectedUnit
+                          && State.units[State.setupSelectedUnit]?.category === 'carried',
+        }],
+        name: 'SetupAttachWeapon'
+    },
+    // Setup: клик по гексу при выбранном юните — поставить (из пула) или перенести (с карты).
+    // Выше SetupToggleSelect, чтобы при выбранном юните клик по чужому гексу не переключал выделение.
+    {
+        requiresAny: [{
+            phaseIsSetup: ()=>PhaseManager.getPhase()==='setup',
+            leftClick:    c=>c.button!==2,
+            notPanel:     c=>!c.clickedSetupPanel,
+            hasSelected:  ()=>State.setupSelectedUnit !== null,
+        }],
+        name: 'SetupPlaceOrMoveOnHex'
+    },
+    // Setup: клик по own-юниту (на карте или в панели) при отсутствии выбора → выбрать его.
+    {
+        requiresAny: [{
+            phaseIsSetup: ()=>PhaseManager.getPhase()==='setup',
+            leftClick:    c=>c.button!==2,
+            hasUnit:      c=>c.unitId !== undefined,
+            ownSide:      c=>State.units[c.unitId]?.side === State.setupSide,
+        }],
+        name: 'SetupToggleSelect'
     },
     {
         requiresAny: [{ leftClick: c => c.button !== 2, clickedBtn: c => c.buttonLabel === 'Save' }],
@@ -595,7 +649,16 @@ export function interpretEvent(e) {
 
     const rule = RULES.find(r => matchRule(r, ctx));  // первое подошедшее правило
     console.log('[click] matched rule:', rule?.name ?? 'NONE');
-    if (!rule) return;
+    if (!rule) {
+        // Диагностика частых "немых" отказов: клик по чужому юниту в MPh.
+        if (PhaseManager.getPhase() === 'movement' && ctx.unitId) {
+            const u = State.units[ctx.unitId];
+            if (u && u.side !== 'attacker') {
+                console.log(`Не можем двигаться этим юнитом - чужая сторона (${u.side}, ждём attacker)`);
+            }
+        }
+        return;
+    }
 
     Engine.execute({ name: rule.name, ctx:ctx }); // → { name: 'SELECT_UNIT', unitId: ..., pos: ... }
 }

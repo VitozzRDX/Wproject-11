@@ -13,6 +13,7 @@ import { terrainAt, setHexMap } from './cards.js';
 import { State } from './state.js';
 import { scenarios } from './scenarios.js';
 import { save, load } from './saveLoad.js';
+import { startSetup } from './setupPhase.js';
 
 const stage = new Konva.Stage({
     container: 'container',
@@ -104,7 +105,25 @@ let worldFxLayer = null;    // world-anchored: LoS, residual, smoke, hit points
 
 // Определяет сторону attacker'а (axis/allied) по нации любого attacker-пехотинца и переключает значок.
 const AXIS_NATIONS = new Set(['german', 'italian', 'japanese']);
-function _refreshSideBadge() {
+// Поднимаем наведённый юнит + связанное: пехота тянет свои possessed оружия, оружие — владельца.
+function _raiseHoveredUnit(unitId) {
+    const u = State.units[unitId];
+    if (!u) return;
+    if (u.category === 'infantry') {
+        u.node.moveToTop();
+        for (const w of Object.values(State.units)) {
+            if (w.category === 'carried' && w.possessorId === unitId) w.node.moveToTop();
+        }
+    } else if (u.category === 'carried') {
+        if (u.possessorId && State.units[u.possessorId]) {
+            State.units[u.possessorId].node.moveToTop();
+        }
+        u.node.moveToTop();
+    }
+    u.node.getLayer()?.batchDraw();
+}
+
+export function refreshSideBadge() {
     const attackerUnit = Object.values(State.units).find(u => u.side === 'attacker' && u.category === 'infantry');
     const isAxis = AXIS_NATIONS.has(attackerUnit?.nation);
     UIState.changeBadge(isAxis);
@@ -147,7 +166,12 @@ async function loadScenario(name) {
 
     // 4. Параметры сценария
     State.orchardInSeason = scen.orchardInSeason;
-    PhaseManager.setPhase('rally');
+    // Если сценарий описывает setup — заходим в неё, иначе сразу rally (fallback для сценариев без setup, напр. B).
+    if (scen.setup) {
+        PhaseManager.setPhase('setup');
+    } else {
+        PhaseManager.setPhase('rally');
+    }
 
     // 5. Пиксельные наборы + hexmap
     await initTerrainLOS(scen.pixelsUrl, scen.roadsUrl);
@@ -168,6 +192,7 @@ async function loadScenario(name) {
     // поэтому проходим по уникальным хексам и вручную вызываем recalculateHex)
     unitLayer = new Konva.Layer();
     State.unitLayer = unitLayer;   // save/load использует этот слой для spawn_unit
+    State.uiLayer   = uiLayer;     // setupPhase использует для перекладывания нод юнитов пул↔карта
     await unitloading.createAndLoadUnits(unitLayer, scen.units);
     stage.add(unitLayer);
     worldFxLayer.moveToTop();   // эффекты (LoS, residual, smoke) над юнитами
@@ -206,7 +231,12 @@ async function loadScenario(name) {
     });
     // addImage асинхронно грузит картинки (await loadImage). Ждём чтобы ноды успели создаться,
     // иначе changeBadge не найдёт их и оба баджа останутся видимыми.
-    setTimeout(_refreshSideBadge, 50);
+    setTimeout(refreshSideBadge, 50);
+
+    // Setup-фаза: расстановка юнитов. Если сценарий описывает setup — стартуем её.
+    if (scen.setup) {
+        startSetup(scen);
+    }
 
     // 9. Камера + компенсация uiLayer (UI остаётся на месте при скролле)
     stage.x(scen.initialCamera?.x ?? 0);
@@ -242,6 +272,17 @@ async function init() {
     // P — печать сета и очистка. C — просто очистка.
     const _tagged = new Set();
     let _tagMode = false;
+
+    // Hover: поднять наведённый юнит + связанное (пехота тянет свои possessed оружия, оружие — владельца).
+    // Удобно просматривать юнитов в плотной стопке.
+    let _hoveredUnitId = null;
+    stage.on('mousemove', (e) => {
+        const unitId = e.target.getAttr('unitId');
+        if (unitId === _hoveredUnitId) return;
+        _hoveredUnitId = unitId;
+        if (!unitId) return;
+        _raiseHoveredUnit(unitId);
+    });
 
     stage.on('click', function (e) {
         const st  = e.target.getStage();
@@ -368,6 +409,10 @@ async function init() {
         }
         requestAnimationFrame(scrollLoop);
     })();
+
+    // Предзагрузка картинок всех TEMPLATES в кэш unitloading. После этого
+    // getImage/loadImage по любому TEMPLATES.src возвращаются мгновенно.
+    await unitloading.preloadAllTemplateImages();
 
     // Стартовый сценарий
     await loadScenario('A');

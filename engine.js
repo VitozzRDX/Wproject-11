@@ -9,6 +9,7 @@ import { getLastHit } from './terrainLOS.js';
 import { flipReplaceUnit, raiseToTop } from './renderer.js';
 import { recalculateHex } from './positioning.js';
 import { save, load } from './saveLoad.js';
+import { initSetupSide, applyDiceRoll, placeFromPool, returnToPool, instantUnitMoveFromHexToHex } from './setupPhase.js';
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
@@ -33,6 +34,88 @@ const handlers = {
 
     Save: () => save(),
     Load: async () => { await load(); },
+
+    RollDice: () => {
+        // MVP: простой d6.
+        const roll = Math.floor(Math.random() * 6) + 1;
+        console.log(`[Setup] ${State.setupSide} dice=${roll}`);
+        applyDiceRoll(roll);
+    },
+
+    // Setup: клик по own-юниту (в пуле или на карте) при отсутствии выбора — выбрать его.
+    SetupToggleSelect: (ctx) => {
+        const newId = ctx.unitId;
+        const prev = State.setupSelectedUnit;
+        if (prev === newId) return;
+        if (prev) State.setUnit(prev, 'selectedForSetup', false);
+        State.setupSelectedUnit = newId;
+        State.setUnit(newId, 'selectedForSetup', true);
+    },
+
+    // Setup: клик по гексу при выбранном юните. Юнит в пуле → поставить, на карте → перенести.
+    // Проверяем занят ли гекс противником и влезет ли по правилам стакинга (макс 3 отряда / 4 лидера).
+    SetupPlaceOrMoveOnHex: (ctx) => {
+        const hex = pixelToHex(ctx.pos.x, ctx.pos.y);
+        const uid = State.setupSelectedUnit;
+        if (!_canPlaceAtHex(uid, hex)) return;   // отказ — выделение сохраняется
+        const u = State.units[uid];
+        const inPool = u.inSetupPool;
+        State.setUnit(uid, 'selectedForSetup', false);
+        State.setupSelectedUnit = null;
+        if (inPool) placeFromPool(uid, hex);
+        else        instantUnitMoveFromHexToHex(uid, hex);
+        console.log(`[Setup] ${inPool ? 'placed' : 'moved'} ${uid} → (${hex.col},${hex.row})`);
+    },
+
+    // Setup: прикрепить выбранное оружие к инфантри (установка possessorId).
+    // Если оружие было в пуле — выносим его в hex инфантри; если на карте в другом hex'е — переносим;
+    // если в том же hex'е — только меняем possessorId.
+    SetupAttachWeapon: (ctx) => {
+        const weaponId = State.setupSelectedUnit;
+        const infantryId = ctx.unitId;
+        const weapon = State.units[weaponId];
+        const infantry = State.units[infantryId];
+        weapon.possessorId = infantryId;
+        State.setUnit(weaponId, 'selectedForSetup', false);
+        State.setupSelectedUnit = null;
+        if (weapon.inSetupPool) {
+            placeFromPool(weaponId, infantry.hex);
+        } else if (!isSameHex(weapon.hex, infantry.hex)) {
+            instantUnitMoveFromHexToHex(weaponId, infantry.hex);
+        }
+        console.log(`[Setup] attached ${weaponId} to ${infantryId}`);
+    },
+
+    // Setup: клик по фону панели + выбранный юнит на карте → вернуть в пул.
+    SetupReturnToPool: () => {
+        const uid = State.setupSelectedUnit;
+        State.setUnit(uid, 'selectedForSetup', false);
+        State.setupSelectedUnit = null;
+        returnToPool(uid);
+        console.log(`[Setup] returned ${uid} to pool`);
+    },
+
+    EndSetupSide: () => {
+        const first = State.currentScenario.setup.whoSetsUpFirst;
+        const current = State.setupSide;
+        UIState.removeButton('EndSetupSide');
+        if (State.setupSelectedUnit) {
+            State.setUnit(State.setupSelectedUnit, 'selectedForSetup', false);
+            State.setupSelectedUnit = null;
+        }
+        if (current === first) {
+            // Текущая сторона — та, что ходила первой. Переключаемся на вторую.
+            const nextSide = first === 'defender' ? 'attacker' : 'defender';
+            initSetupSide(nextSide);
+        } else {
+            // Отработали обе стороны — выходим в rally.
+            State.setupSide = null;
+            State.idsInSetupPool = [];
+            UIState.hideSetupPanel();
+            PhaseManager.setPhase('rally');
+            console.log('[Setup] done → rally');
+        }
+    },
 
     MOVE: (ctx) => {
 
@@ -106,6 +189,12 @@ const handlers = {
         if (State.advanceSelected) {
             State.setUnit(State.advanceSelected, 'selectedForAdvance', false);
             State.advanceSelected = null;
+            return;
+        }
+        // Setup: сбросить выбранного (из пула или с карты).
+        if (State.setupSelectedUnit) {
+            State.setUnit(State.setupSelectedUnit, 'selectedForSetup', false);
+            State.setupSelectedUnit = null;
             return;
         }
     },
@@ -1007,6 +1096,27 @@ const handlers = {
 // Общий пайплайн огня для всех фаз (MPh DFF, PFPh prep, DFPh Final Fire).
 // Structure: сначала формируем sub-FGs + рисуем LoS-визуал; затем switch по фазе
 // с pre-checks и loop по sub-FG (у каждой фазы свой target getter и пост-обработка).
+// Setup: проверка возможности поставить/перенести юнита в hex.
+// Запрет — пехота противника в гексе ИЛИ переполнение стопки (макс 3 отряда / 4 лидера).
+function _canPlaceAtHex(uid, hex) {
+    const hasEnemyInfantry = Object.values(State.units).some(u =>
+        u.hex && isSameHex(u.hex, hex) && u.category === 'infantry' && u.side !== State.setupSide
+    );
+    if (hasEnemyInfantry) {
+        console.log(`[Setup] нельзя — в (${hex.col},${hex.row}) юниты противника`);
+        return false;
+    }
+    // Если юнит уже на карте и мы его двигаем в тот же hex — он не считается новым (пустой movementGroup).
+    const u = State.units[uid];
+    const sameHex = u.hex && isSameHex(u.hex, hex);
+    const movementGroup = sameHex ? [] : [uid];
+    if (!Rules.checkOverstack(hex, movementGroup, State.units)) {
+        console.log(`[Setup] overstack в (${hex.col},${hex.row}) — макс 3 отряда / 4 лидера`);
+        return false;
+    }
+    return true;
+}
+
 function _isOpenGround(hex) {
     return terrainAt(hex.col, hex.row).length === 0;
 }
@@ -1725,7 +1835,10 @@ async function _handleFire(ctx) {
             // Свежий список целей — двинувшиеся в hex этой MPh (движущиеся моменту).
             // Функция, а не массив: между sub-FG некоторые цели могут быть eliminated.
             const getTargets = () => _movedTargetsInHex(targetHex);
-            if (getTargets().length === 0) return;
+            if (getTargets().length === 0) {
+                console.log(`[Fire] В (${targetHex.col},${targetHex.row}) нет свежедвинувшихся целей — юниты закончили движение ранее, DFF невозможен.`);
+                return;
+            }
 
             // 3.2.2 (same-hex FG unity) + 3.3.3 (shots ≤ MF цели). Логи внутри функций.
             if (Rules.check_separate_attack(getTargets(), firegroupUnits, State.fired_from_on_target_in_hex)) return;

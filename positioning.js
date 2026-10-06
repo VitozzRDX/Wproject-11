@@ -29,6 +29,25 @@ function _stackOrder(hex) {
     return stack;
 }
 
+// Мгновенная расстановка стопки в hex'е (без tween) — для setup и load.
+// Прямое node.position + синхронизация u.x/u.y (минуя setUnit('pos'), который
+// запустил бы Konva.Tween в renderer).
+export function recalculateHexInstant(hex) {
+    if (!hex) return;
+    const stack = _stackOrder(hex);
+    if (stack.length === 0) return;
+    const center = hexToPixel(hex.col, hex.row);
+    stack.forEach((unit, index) => {
+        const offset = index - (stack.length - 1) / 2;
+        const nx = center.x + STEP * offset - unit.image.width  / 2;
+        const ny = center.y - STEP * offset - unit.image.height / 2;
+        unit.x = nx;
+        unit.y = ny;
+        unit.node.position({ x: nx, y: ny });
+        unit.node.moveToTop();
+    });
+}
+
 export function recalculateHex(hex) {
     if (!hex) return;
 
