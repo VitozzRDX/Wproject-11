@@ -5,9 +5,10 @@
 
 import { State } from './state.js';
 import { UIState } from './uiState.js';
-import { spawn_unit, TEMPLATES, getImage } from './unitloading.js';
+import { spawn_unit, TEMPLATES, getImage, UNIT_IMAGE_SIZE } from './unitloading.js';
 import { hexToPixel } from './hexUtils.js';
 import { recalculateHexInstant } from './positioning.js';
+import { Rules } from './rules.js';
 
 // Счётчики по templateId — чтобы id юнитов были читаемыми: ge_447_01, ge_447_02, am_667_01, ...
 const _idCounters = {};
@@ -17,19 +18,19 @@ const PAD_X = 24;
 const PAD_Y = 8;
 const STACK_OFFSET = 3;         // смещение по X между одинаковыми юнитами в стопке
 const GAP = 4;                  // вертикальный зазор между строками
-const PANEL_Y = 60;
-const PANEL_RIGHT_MARGIN = 16;
+const PANEL_Y = 135;
+const PANEL_RIGHT_MARGIN = 51;
 
 // Точка входа: вызывается из main.js после PhaseManager.setPhase('setup').
+// State.currentScenario уже установлен в loadScenario — здесь дубль не нужен.
 export function startSetup(scen) {
-    State.currentScenario = scen;
     initSetupSide(scen.setup.whoSetsUpFirst);
 }
 
 // Инициализирует setup-подфазу для стороны. Вызывается из startSetup и handler'а EndSetupSide.
 export async function initSetupSide(side) {
     State.setupSide = side;              // сторона, которая сейчас расставляет; читается хендлерами и правилами
-    State.setupSelectedUnit = null;      // id выбранного юнита (панель или карта); сброс при входе
+    State.setupSelectedUnits = [];       // id'шки выбранных юнитов (0..3); сброс при входе
     State.setupDiceRolled = false;       // защита от повторного ролла и расстановки до ролла
     State.idsInSetupPool = [];           // id'шки юнитов, которые сейчас в панели
 
@@ -97,11 +98,10 @@ export function refreshSetupPanel() {
         return;
     }
     const items = _buildIDCoordsArr(ids);   // [{id, x, y}] — локальные координаты внутри панели
-    const firstImg = getImage(TEMPLATES[State.units[items[0].id].templateId].src);
     const maxX = Math.max(...items.map(it => it.x));
     const maxY = Math.max(...items.map(it => it.y));
-    const w = maxX + firstImg.width  + PAD_X * 2;
-    const h = maxY + firstImg.height + PAD_Y * 2;
+    const w = maxX + UNIT_IMAGE_SIZE + PAD_X * 2;
+    const h = maxY + UNIT_IMAGE_SIZE + PAD_Y * 2;
 
     const stage = State.uiLayer.getStage();
     const panelX = stage.width() - w - PANEL_RIGHT_MARGIN;
@@ -130,7 +130,7 @@ function _buildIDCoordsArr(ids) {   // ids: ['setup_1','setup_2',...]
         if (tpl === prevTpl) {
             x += STACK_OFFSET;
         } else {
-            if (prevTpl !== null) y += getImage(TEMPLATES[tpl].src).height + GAP;
+            if (prevTpl !== null) y += UNIT_IMAGE_SIZE + GAP;
             x = 0;
         }
         items.push({ id, x, y });
@@ -154,7 +154,7 @@ export function refreshEndSetupSideButton() {
 export function placeFromPool(unitId, hex) {
     const u = State.units[unitId];
     u.hex = hex;
-    u.path = [{ hex, isRoad: false }];
+    u.path = [{ hex, isRoad: Rules._isRoadHex(hex) }];
     u.inSetupPool = false;
     u.node.moveTo(State.unitLayer);
     const idx = State.idsInSetupPool.indexOf(unitId);
@@ -169,7 +169,7 @@ export function instantUnitMoveFromHexToHex(unitId, newHex) {
     const u = State.units[unitId];
     const oldHex = u.hex;
     u.hex = newHex;
-    u.path = [{ hex: newHex, isRoad: false }];
+    u.path = [{ hex: newHex, isRoad: Rules._isRoadHex(newHex) }];
     recalculateHexInstant(oldHex);
     recalculateHexInstant(newHex);
 }

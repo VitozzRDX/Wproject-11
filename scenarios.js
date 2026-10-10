@@ -94,6 +94,8 @@ export const scenarios = {
     pixelsUrl:    './terrainPixels.json',
     cardVisuals: A_CARDVISUALS,
     units:       [],   // пусто — наполняется через setup-фазу
+    disableSmoke: ['am_536'],   // templateId, у которых smoke отключён в этом сценарии
+    // Сценарий 28 августа — orchard в сезоне (апрель-октябрь), блокирует LoS между разной elevation.
     setup: {
       whoSetsUpFirst: 'defender',
       sides: {
@@ -108,6 +110,7 @@ export const scenarios = {
             { templateId: 'ge_MMG', count: 1 },
             { templateId: 'ge_LMG', count: 3 },
           ],
+          bounds: { all: { col: [27, 43] } },
         },
         // Союзники: русские всегда в пуле + американцы по кубу.
         attacker: {
@@ -115,6 +118,12 @@ export const scenarios = {
             { templateId: 'so_426', count: 7 },
             { templateId: 'so_L81', count: 1 },
           ],
+          bounds: {
+            byNation: {
+              soviet:   { col: [21, 25] },
+              american: { col: [48, 49] },
+            },
+          },
           diceRoll: {
             dice: 'd6',
             outcomes: {
@@ -168,7 +177,7 @@ export const scenarios = {
         },
       },
     },
-    orchardInSeason: false,
+    orchardInSeason: true,   // 28 августа — orchard в сезоне (апрель-октябрь)
     activeRole: 'attacker',
     initialCamera: { x: 750, y: 0 },
     roadsUrl: './roadPixels.json',
@@ -180,7 +189,7 @@ export const scenarios = {
     pixelsUrl:    './terrainPixels.json',
     cardVisuals: A_CARDVISUALS,
     units:       A_UNITS,
-    orchardInSeason: false,
+    orchardInSeason: true,   // 28 августа — orchard в сезоне
     activeRole: 'attacker',
     initialCamera: { x: 750, y: 0 },
     roadsUrl: './roadPixels.json',

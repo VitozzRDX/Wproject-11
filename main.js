@@ -1,18 +1,19 @@
 import * as interpreter from "/interpreter.js";
 import * as unitloading from "/unitloading.js";
+import { UNIT_IMAGE_SIZE } from './unitloading.js';
 import { PhaseManager } from './phase_manager.js';
 import * as renderer from './renderer.js';
-import { initPositioning, recalculateHex } from './positioning.js';
+import { initPositioning, recalculateHex, restoreUnitZ } from './positioning.js';
 import { RendererUI } from './rendererUI.js';
 import { UIState } from './uiState.js';
 import { runFireSimulation } from './fireSimulation.js';
 import { runWoundSimulation } from './woundSimulation.js';
 import { initTerrainLOS } from './terrainLOS.js';
-import { hexToPixel, pixelToHex, COL_COUNT, ROW_COUNT, R, hexLabel } from './hexUtils.js';
+import { hexToPixel, pixelToHex, COL_COUNT, ROW_COUNT, R, hexLabel, hexesInRect } from './hexUtils.js';
 import { terrainAt, setHexMap } from './cards.js';
 import { State } from './state.js';
 import { scenarios } from './scenarios.js';
-import { save, load } from './saveLoad.js';
+import { save, load, hasSave } from './saveLoad.js';
 import { startSetup } from './setupPhase.js';
 
 const stage = new Konva.Stage({
@@ -36,7 +37,7 @@ function draw_hex_grid(layer) {
     // new coords: col in [0, 2*COL_COUNT-1] (uA → col -1 отрицательный, вне канона — пропускаем),
     // row in [2, ROW_COUNT+1] (row 1 = ряд над uB1, за пределами карты — пропускаем).
     for (let col = 0; col < 2 * COL_COUNT - 1; col++) {
-        for (let row = 2; row <= ROW_COUNT + 1; row++) {
+        for (let row = 1; row <= ROW_COUNT + 1; row++) {
             const { x, y } = hexToPixel(col, row);
             layer.add(new Konva.RegularPolygon({
                 x, y,
@@ -105,21 +106,36 @@ let worldFxLayer = null;    // world-anchored: LoS, residual, smoke, hit points
 
 // Определяет сторону attacker'а (axis/allied) по нации любого attacker-пехотинца и переключает значок.
 const AXIS_NATIONS = new Set(['german', 'italian', 'japanese']);
-// Поднимаем наведённый юнит + связанное: пехота тянет свои possessed оружия, оружие — владельца.
+// Setup-фаза: выбранные юниты «липнут» к курсору со сдвигом вниз-вправо.
+// Сдвиг нужен чтобы курсор физически попадал на то, что под sticky — hover работает дальше.
+const STICKY_OFFSET_X = 1;
+const STICKY_OFFSET_Y = 1;
+function _setupStickyCursor() {
+    if (PhaseManager.getPhase() !== 'setup') return;
+    if (State.setupSelectedUnits.length === 0) return;
+    const pointer = stage.getPointerPosition();
+    State.setupSelectedUnits.forEach((id, i) => {
+        const u = State.units[id];
+        const offset = i * 3;   // лёгкая стопка при нескольких выбранных (dblclick)
+        if (u.inSetupPool) {
+            // uiLayer — screen coords.
+            u.node.x(pointer.x + STICKY_OFFSET_X + offset);
+            u.node.y(pointer.y + STICKY_OFFSET_Y);
+        } else {
+            // unitLayer — world coords (учитываем stage-скролл).
+            u.node.x(pointer.x - stage.x() + STICKY_OFFSET_X + offset);
+            u.node.y(pointer.y - stage.y() + STICKY_OFFSET_Y);
+        }
+    });
+    State.uiLayer.batchDraw();
+    State.unitLayer.batchDraw();
+}
+
+// Поднимаем только наведённый юнит — чтобы его оружие (или другие соседи по стеку) его не закрывали.
 function _raiseHoveredUnit(unitId) {
     const u = State.units[unitId];
     if (!u) return;
-    if (u.category === 'infantry') {
-        u.node.moveToTop();
-        for (const w of Object.values(State.units)) {
-            if (w.category === 'carried' && w.possessorId === unitId) w.node.moveToTop();
-        }
-    } else if (u.category === 'carried') {
-        if (u.possessorId && State.units[u.possessorId]) {
-            State.units[u.possessorId].node.moveToTop();
-        }
-        u.node.moveToTop();
-    }
+    u.node.moveToTop();
     u.node.getLayer()?.batchDraw();
 }
 
@@ -135,6 +151,7 @@ async function loadScenario(name) {
     const scen = scenarios[name];
     if (!scen) { console.warn(`[loadScenario] '${name}' не найден`); return; }
     console.log(`[loadScenario] ${name}`);
+    State.currentScenario = scen;   // доступно всему коду, независимо от наличия setup-блока
 
     // 1. Wipe State — все игровые данные
     State.units = {};
@@ -208,25 +225,30 @@ async function loadScenario(name) {
     });
 
     // 8. Стандартные UI: кнопки + крутилка
-    UIState.addButton('NextPhase', { x: 10,  y: 10, label: 'NextPhase' });
+    // NextPhase в фазе setup не показываем — добавляется в EndSetupSide после последней стороны.
+    if (!scen.setup) {
+        UIState.addButton('NextPhase', { x: 10, y: 10, label: 'NextPhase' });
+    }
     UIState.addButton('Save',      { x: 160, y: 10, label: 'Save' });
     UIState.addButton('Load',      { x: 310, y: 10, label: 'Load' });
+    if (!hasSave()) UIState.fadeButton('Load');   // нет сейва — кнопка неактивна
     UIState.addImage('turnphase', {
         src: './graf/turnphase.gif',
-        x: window.innerWidth - 200, y: 20,
-        opacity: 0.5,
+        x: window.innerWidth - 170, y: 15,
+        opacity: 1,
         scale: 0.8,
+        overlayPolygon: { sides: 8, radius: 53, rotation: 22.5, stroke: 'white', strokeWidth: 2 },
     });
     // Два значка стороны поверх крутилки — показываем один из них через changeBadge.
     // Сдвиг +30/+30 — ручная подгонка центра относительно turnphase (разные размеры картинок).
     UIState.addImage('sideAllied', {
         src: './graf/turnphaseallied.gif',
-        x: window.innerWidth - 200 + 35, y: 20 + 35,
+        x: window.innerWidth - 170 + 35, y: 15 + 35,
         opacity: 0.5, scale: 0.8,
     });
     UIState.addImage('sideAxis', {
         src: './graf/turnphaseaxis.gif',
-        x: window.innerWidth - 200 + 24, y: 20 + 24,
+        x: window.innerWidth - 170 + 24, y: 15 + 24,
         opacity: 0.5, scale: 0.8,
     });
     // addImage асинхронно грузит картинки (await loadImage). Ждём чтобы ноды успели создаться,
@@ -267,24 +289,104 @@ async function init() {
     stage.add(uiLayer);
     RendererUI.init(uiLayer, worldFxLayer);
 
+    // Тёмная полоса под UI: от верха экрана до чуть ниже NextPhase. Кнопки/крутилка/значки
+    // внутри uiLayer рендерятся поверх (полоса moveToBottom этого слоя); карта и юниты
+    // в нижних слоях остаются под ней (uiLayer — верхний слой сцены).
+    const topBar = new Konva.Rect({
+        x: 0, y: 0,
+        width: window.innerWidth,
+        height: 56,   // NextPhase y=10 + высота кнопки 36 + 10 отступ снизу
+        fill: 'rgba(0,0,0,0.6)',
+        listening: false,
+        name: 'topBar',
+    });
+    uiLayer.add(topBar);
+    topBar.moveToBottom();
+
     // --- DEBUG tagging mode ---
     // F — toggle; в режиме клики собирают hex-лейблы в Set (повторный клик = убрать)
     // P — печать сета и очистка. C — просто очистка.
     const _tagged = new Set();
     let _tagMode = false;
 
-    // Hover: поднять наведённый юнит + связанное (пехота тянет свои possessed оружия, оружие — владельца).
-    // Удобно просматривать юнитов в плотной стопке.
+    // Hover: поднять наведённый юнит. При смене наведённого — восстанавливаем z-порядок стопки предыдущего.
     let _hoveredUnitId = null;
-    stage.on('mousemove', (e) => {
-        const unitId = e.target.getAttr('unitId');
-        if (unitId === _hoveredUnitId) return;
-        _hoveredUnitId = unitId;
-        if (!unitId) return;
-        _raiseHoveredUnit(unitId);
+
+    // --- Lasso: резиновая рамка для группового выбора ---
+    let _dragStart     = null;    // точка начала drag в мировых координатах (null — не тянем)
+    let _dragRectNode  = null;    // видимый Konva.Rect во время drag
+    let _dragWasReal   = false;   // был ли drag значимым (чтобы подавить следующий click)
+
+    // Переводит положение мыши в мировые координаты карты. Konva даёт экранную позицию внутри canvas,
+    // stage.x/y — сдвиг от WASD-скроллинга. Вычитаем сдвиг чтобы получить точку в неподвижной системе карты.
+    function _worldPos() {
+        const raw = stage.getPointerPosition();
+        return { x: raw.x - stage.x(), y: raw.y - stage.y() };
+    }
+
+    stage.on('mousedown', (e) => {
+        if (e.evt.button !== 0) return;                         // только левая кнопка
+        if (e.target.getAttr('unitId')) return;                 // по юниту — не drag
+        if (e.target.getParent()?.getAttr('buttonLabel')) return;   // по кнопке — не drag
+        if (e.target.name?.() === 'setupPanel') return;         // по setup-подложке — не drag
+        _dragStart = _worldPos();
+        _dragRectNode = new Konva.Rect({
+            x: _dragStart.x, y: _dragStart.y, width: 0, height: 0,
+            stroke: 'blue', strokeWidth: 1,
+            dash: [4, 2],   // пунктир: 4 пикселя линия, 2 пикселя пустоты, повтор
+            listening: false,
+        });
+        worldFxLayer.add(_dragRectNode);
     });
 
+    stage.on('mousemove', (e) => {
+        // Setup «липкий курсор»: позиционирует выбранных юнитов, hover работает ниже параллельно.
+        _setupStickyCursor();
+
+        // Во время drag — обновляем рамку, hover подавлен.
+        if (_dragStart) {
+            const pt = _worldPos();
+            _dragRectNode.x(Math.min(_dragStart.x, pt.x));
+            _dragRectNode.y(Math.min(_dragStart.y, pt.y));
+            _dragRectNode.width(Math.abs(pt.x - _dragStart.x));
+            _dragRectNode.height(Math.abs(pt.y - _dragStart.y));
+            worldFxLayer.batchDraw();
+            return;
+        }
+        // Обычный hover.
+        const unitId = e.target.getAttr('unitId');
+        if (unitId === _hoveredUnitId) return;
+        const prevId = _hoveredUnitId;
+        _hoveredUnitId = unitId;
+        if (prevId) restoreUnitZ(prevId);
+        if (unitId) _raiseHoveredUnit(unitId);
+    });
+
+    stage.on('mouseup', (e) => {
+        if (!_dragStart) return;
+        const pt = _worldPos();
+        const w = Math.abs(pt.x - _dragStart.x);
+        const h = Math.abs(pt.y - _dragStart.y);
+        _dragRectNode.destroy();
+        _dragRectNode = null;
+        const start = _dragStart;
+        _dragStart = null;
+        if (w < 4 && h < 4) return;   // слишком маленько — обычный клик обработается отдельно
+        _dragWasReal = true;
+        const rect = {
+            x: Math.min(start.x, pt.x), y: Math.min(start.y, pt.y),
+            w, h,
+        };
+        interpreter.interpretLassoRelease(hexesInRect(rect));
+        worldFxLayer.batchDraw();
+    });
+
+    // Dbl-клик по юниту: групповое добавление в MG (MPh) или FG (фазы огня).
+    stage.on('dblclick', (e) => interpreter.interpretDblClickEvent(e));
+
     stage.on('click', function (e) {
+        // После реального drag Konva всё равно фирит click — подавляем один раз.
+        if (_dragWasReal) { _dragWasReal = false; return; }
         const st  = e.target.getStage();
         const raw = st.getPointerPosition();
         const pos = { x: raw.x - st.x(), y: raw.y - st.y() };
@@ -329,7 +431,7 @@ async function init() {
         _overlayLayer = new Konva.Layer({ listening: false });
         // Все terrain-хексы (new coords: col 0..2*COL_COUNT-1, row 2..ROW_COUNT+1)
         for (let col = 0; col < 2 * COL_COUNT - 1; col++) {
-            for (let row = 2; row <= ROW_COUNT + 1; row++) {
+            for (let row = 1; row <= ROW_COUNT + 1; row++) {
                 const terrain = terrainAt(col, row);
                 if (terrain.length === 0) continue;
                 const { x, y } = hexToPixel(col, row);

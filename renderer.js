@@ -1,5 +1,24 @@
 import { State } from './state.js';
 
+// Короткая дрожь ноды (имитация отдачи MG при стрельбе).
+// Случайные смещения ±amp px в течение duration ms; затем возврат на x0/y0.
+export function shakeNode(node, amp = 1.5, duration = 400) {
+    const x0 = node.x(), y0 = node.y();
+    const step = 40;
+    let elapsed = 0;
+    const timer = setInterval(() => {
+        elapsed += step;
+        if (elapsed >= duration) {
+            clearInterval(timer);
+            node.x(x0); node.y(y0);
+        } else {
+            node.x(x0 + (Math.random() * 2 - 1) * amp);
+            node.y(y0 + (Math.random() * 2 - 1) * amp);
+        }
+        node.getLayer()?.batchDraw();
+    }, step);
+}
+
 // Анимация флипа юнита на broken-сторону
 // Флип юнита на broken-сторону (toBroken=true) или обратно (toBroken=false — после repair).
 function flipRendering(node, unit, toBroken = true) {

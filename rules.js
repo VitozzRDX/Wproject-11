@@ -528,7 +528,7 @@ function calcFireEffect(units, targetHex, drm = 0) {
 
     if (red === white) {
         const newCol = _applyCowering(units, col, red, white);
-        if (newCol === null) return { effect: false, baseDr: dr, coloredDie: red };
+        if (newCol === null) return { effect: false, baseDr: dr, coloredDie: red, whiteDie: white };
         col = newCol;
     }
 
@@ -539,10 +539,10 @@ function calcFireEffect(units, targetHex, drm = 0) {
     console.log(`[calcFireEffect] FP=${fp}, col=${col}, DR=${dr} (${red}+${white}), DRM=${drm}, idx=${idx}`);
     if (idx >= arr.length) {
         console.log(`[calcFireEffect] промах (idx ${idx} >= length ${arr.length})`);
-        return { effect: false, baseDr: dr, coloredDie: red };
+        return { effect: false, baseDr: dr, coloredDie: red, whiteDie: white };
     }
     console.log(`[calcFireEffect] результат:`, arr[idx]);
-    return { effect: arr[idx], baseDr: dr, coloredDie: red };
+    return { effect: arr[idx], baseDr: dr, coloredDie: red, whiteDie: white };
 }
 
 // Обработка MC для группы целей.
@@ -1194,7 +1194,8 @@ function mustRout(unit, units, orchardInSeason = false) {
 
     // (b) в Open Ground + Good Order enemy в normal range + LoS
     const terrain = terrainAt(unit.hex.col, unit.hex.row);
-    const openGround = terrain.length === 0;
+    // crestLine — только маркер границы, укрытия не даёт; гекс только с ним — всё равно Open Ground.
+    const openGround = terrain.every(t => t === 'crestLine');
     if (openGround) {
         for (const other of Object.values(units)) {
             if (other.side === unit.side) continue;
@@ -1283,7 +1284,7 @@ function fireAttack(firegroupUnits, targetHex, hexUnits, units, orchardInSeason 
 
     console.log(`[fireAttack] TEM=${tem}, HINDRANCE=${hindrance}, FFNAM=${ffnam}, FFMO=${ffmo}, LEADER=${leadershipDRM}, totalDRM=${totalDRM}`);
 
-    const { effect, baseDr, coloredDie } = calcFireEffect(firegroupUnits, targetHex, totalDRM);
+    const { effect, baseDr, coloredDie, whiteDie } = calcFireEffect(firegroupUnits, targetHex, totalDRM);
     const changes = applyFireEffect(effect, hexUnits);
 
     // B# (malfunction) и RoF (сохранение статуса) для weapons в FG
@@ -1305,7 +1306,7 @@ function fireAttack(firegroupUnits, targetHex, hexUnits, units, orchardInSeason 
         _checkLeaderLoss(nmcSubjects, changes);
     }
 
-    return { changes, weaponsKeepingRoF, residualFP };
+    return { changes, weaponsKeepingRoF, residualFP, coloredDie, whiteDie };
 }
 
 // Стоимость входа в гекс по типу террейна (MF)
@@ -1453,11 +1454,28 @@ function _portageExcess(u, units, mg = null) {
         .filter(w => w.category === 'carried' && w.possessorId === u.id)
         .reduce((s, w) => s + (w.portagePoints ?? 0), 0);
 
-    // SMC contribution: каждый Good Order лидер в MG добавляет +1 IPC ПЕРВОМУ MMC в MG.
+    // SMC contribution: каждый Good Order лидер в MG добавляет +1 IPC ОДНОЙ MMC —
+    // той, которой это реально нужно (у кого максимальный перевес без бонуса).
+    // Так результат не зависит от порядка добавления в MG: игрок, скорее всего, хочет,
+    // чтобы лидер помогал тому, кто тащит тяжёлое, а не первому попавшемуся.
     let smcBonus = 0;
     if (mg && u.type === 'squad') {
+        // Все MMC (squad'ы) в MG — кандидаты на SMC-бонус.
         const mmcsInMg = mg.filter(id => units[id].type === 'squad');
-        if (mmcsInMg[0] === u.id) {
+        // Для каждой считаем «перевес» без SMC-бонуса: possessedPP − baseIPC (учитывая CX).
+        const needs = mmcsInMg.map(id => {
+            const squad = units[id];
+            const pp = Object.values(units)
+                .filter(w => w.category === 'carried' && w.possessorId === id)
+                .reduce((s, w) => s + (w.portagePoints ?? 0), 0);
+            const baseIpc = squad.ipc - (squad.exhausted ? 1 : 0);   // CX → -1 IPC
+            return { id, excess: Math.max(0, pp - baseIpc) };
+        });
+        // Сортируем по убыванию «нужды»; побеждает MMC с наибольшим перевесом.
+        needs.sort((a, b) => b.excess - a.excess);
+        const chosen = needs[0]?.id;
+        // Если текущий юнит — тот самый выбранный, выдаём ему бонус = количество Good Order лидеров в MG.
+        if (chosen === u.id) {
             smcBonus = mg.filter(id => {
                 const l = units[id];
                 return l.type === 'leader' && !l.broken && !l.pinned && !l.wounded;
@@ -1636,6 +1654,7 @@ export const Rules = {
         if (u.broken || u.pinned || u.wounded || u.exhausted) return false;
         if (u.hasStartedMoving) return false;
         if (u.assaultMovement) return false;
+        if (u.wasExhaustedLastTurn) return false;   // A8.2: нельзя DT если в прошлой MPh юнит был CX
         return true;
     },
 
@@ -1722,7 +1741,7 @@ export const Rules = {
         if (u.type !== 'squad') return false;
         if (!u.smokeExponent)   return false;   // нет SE — не может размещать
         if (u.smokeAttempted)   return false;   // уже пытался в этом MPh
-        if (u.broken || u.pinned || u.wounded || u.exhausted) return false;
+        if (u.broken || u.pinned || u.wounded) return false;   // CX допускается — +1 DRM учтён в rollSmokePlacementAttempts
         if (u.mf - _portageExcess(u, units, mg) < 1) return false;
         return true;
     },

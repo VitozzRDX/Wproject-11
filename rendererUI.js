@@ -12,6 +12,36 @@ const routLegalNodes = [];         // Konva-ноды подсветки лега
 const routShelterNodes = [];       // Konva-ноды подсветки потенциальных укрытий (blue)
 const routPathNodes    = [];       // Konva-ноды подсветки коридора путей до укрытий (purple)
 const ccHexNodes       = [];       // Konva-ноды подсветки CC-хексов (orange)
+const setupBoundsNodes = [];       // Konva-ноды подсветки setup-зоны (зелёная заливка)
+const smokeNodes       = [];       // Konva-группы анимированного дыма (нужны для cleanAll + save/load)
+
+// 3×3 позиции точек на лицах 1-6. [col, row] где col/row ∈ {0,1,2}.
+const DIE_PIPS = {
+    1: [[1,1]],
+    2: [[0,0],[2,2]],
+    3: [[0,0],[1,1],[2,2]],
+    4: [[0,0],[2,0],[0,2],[2,2]],
+    5: [[0,0],[2,0],[1,1],[0,2],[2,2]],
+    6: [[0,0],[2,0],[0,1],[2,1],[0,2],[2,2]],
+};
+
+// Собирает одну грань кубика: квадрат нужного цвета + точки (circles).
+function _makeDie(x, y, size, fill, value, pipColor) {
+    const g = new Konva.Group({ x, y });
+    g.add(new Konva.Rect({
+        x: 0, y: 0, width: size, height: size, fill, cornerRadius: 3,
+        stroke: 'black', strokeWidth: 0.5,
+    }));
+    const frac = { 0: 0.25, 1: 0.5, 2: 0.75 };   // col/row → доля size
+    const r = Math.round(size * 0.08);           // радиус точки
+    for (const [c, row] of DIE_PIPS[value] ?? []) {
+        g.add(new Konva.Circle({
+            x: size * frac[c], y: size * frac[row],
+            radius: r, fill: pipColor,
+        }));
+    }
+    return g;
+}
 
 export const RendererUI = {
     // Очищает residualFP-счётчики и LoS-линии на worldFxLayer + все .img-* на uiLayer.
@@ -29,11 +59,16 @@ export const RendererUI = {
         routPathNodes.length = 0;
         ccHexNodes.forEach(n => n.destroy());
         ccHexNodes.length = 0;
+        setupBoundsNodes.forEach(n => n.destroy());
+        setupBoundsNodes.length = 0;
+        smokeNodes.forEach(n => n.destroy());
+        smokeNodes.length = 0;
         worldFxLayer?.batchDraw();
         // Удалить все .img-* (крутилка и другие персистентные UI-картинки)
         uiLayer?.getChildren(n => n.name()?.startsWith('img-')).forEach(n => n.destroy());
         // Удалить CC-панель если была.
         RendererUI.removeCCPanel();
+        RendererUI.removeDice();
         uiLayer?.batchDraw();
     },
 
@@ -56,6 +91,9 @@ export const RendererUI = {
             if (action === 'fadeButton')     RendererUI.fadeButton(label);
             if (action === 'showSetupPanel') RendererUI.drawSetupPanel(data.bounds);
             if (action === 'hideSetupPanel') RendererUI.removeSetupPanel();
+            if (action === 'setSetupBounds') RendererUI.drawSetupBounds(data.hexes);
+            if (action === 'showDice')       RendererUI.drawDice(data.colored, data.white);
+            if (action === 'hideDice')       RendererUI.removeDice();
             if (action === 'flashLOS')       RendererUI.drawLOSLine(data.from, data.to, data.color);
             if (action === 'flashHitPoints') RendererUI.drawHitPoints(data);
             if (action === 'setResidualFP')  RendererUI.drawResidualCounter(data.hex, data.fp);
@@ -107,6 +145,7 @@ export const RendererUI = {
             puffs.push(puff);
         }
         worldFxLayer.add(group);
+        smokeNodes.push(group);
 
         // Каждый кружок проходит цикл ~2.5 сек: растёт, поднимается, покачивается, растворяется.
         // Фазы со сдвигом (i / N) — всегда несколько puff'ов на разных стадиях.
@@ -399,6 +438,47 @@ export const RendererUI = {
         if (panel) { panel.destroy(); uiLayer.batchDraw(); }
     },
 
+    // Пара d6 (colored + white) под крутилкой. Клик скрывает.
+    drawDice(colored, white) {
+        RendererUI.removeDice();
+        const DIE = 30, GAP = 6, PAD = 6;
+        const w = PAD * 2 + DIE * 2 + GAP;
+        const h = PAD * 2 + DIE;
+        const stage = uiLayer.getStage();
+        // Центруем под крутилкой (её центр ≈ stage.width() - 170 + 48).
+        const x = stage.width() - 170 + 48 - w / 2;
+        const y = 130;
+        const group = new Konva.Group({ x, y, name: 'diceDisplay' });
+        group.add(new Konva.Rect({ x: 0, y: 0, width: w, height: h, fill: 'rgba(0,0,0,0.7)', cornerRadius: 4 }));
+        group.add(_makeDie(PAD,              PAD, DIE, 'red',   colored, 'white'));
+        group.add(_makeDie(PAD + DIE + GAP,  PAD, DIE, 'white', white,   'black'));
+        group.on('click', () => RendererUI.removeDice());
+        uiLayer.add(group);
+        uiLayer.batchDraw();
+    },
+
+    removeDice() {
+        const d = uiLayer?.findOne('.diceDisplay');
+        if (d) { d.destroy(); uiLayer.batchDraw(); }
+    },
+
+    // Подсветка легальной setup-зоны (зелёные hex'ы на worldFxLayer).
+    // Передача пустого массива очищает подсветку.
+    drawSetupBounds(hexes) {
+        for (const n of setupBoundsNodes) n.destroy();
+        setupBoundsNodes.length = 0;
+        for (const hex of hexes) {
+            const { x, y } = hexToPixel(hex.col, hex.row);
+            const node = new Konva.RegularPolygon({
+                x, y, sides: 6, radius: R, rotation: 30,
+                fill: 'rgba(0,200,0,0.18)', listening: false,
+            });
+            worldFxLayer.add(node);
+            setupBoundsNodes.push(node);
+        }
+        worldFxLayer.batchDraw();
+    },
+
     // Обновить visibility selectRect'ов в панели по списку выделенных.
     updateCCPanelSelect(selectedIds) {
         const panel = uiLayer?.findOne('.ccPanel');
@@ -430,10 +510,24 @@ export const RendererUI = {
         RendererUI.removeButton(label);
         const group = new Konva.Group({ x, y, name: `btn-${label}` });
         group.setAttr('buttonLabel', label);
-        const rect  = new Konva.Rect({ width: 120, height: 36, fill: '#333', cornerRadius: 4 });
+        const rect  = new Konva.Rect({
+            width: 120, height: 36, fill: '#333', cornerRadius: 4,
+            stroke: 'white', strokeWidth: 1,
+        });
         const text  = new Konva.Text({ text: label, fill: '#fff',
                         width: 120, height: 36, align: 'center', verticalAlign: 'middle' });
         group.add(rect, text);
+
+        // Анимация нажатия: сжатие на 4% + сдвиг вниз.
+        group.on('mousedown', () => {
+            group.to({ scaleX: 0.96, scaleY: 0.96, offsetY: 2, duration: 0.06 });
+        });
+        const _release = () => {
+            group.to({ scaleX: 1, scaleY: 1, offsetY: 0, duration: 0.1 });
+        };
+        group.on('mouseup', _release);
+        group.on('mouseleave', _release);   // если курсор ушёл с зажатой кнопкой
+
         uiLayer.add(group);
         uiLayer.batchDraw();
     },
@@ -443,7 +537,7 @@ export const RendererUI = {
         if (btn) { btn.destroy(); uiLayer.batchDraw(); }
     },
 
-    async drawImage(name, { src, x, y, opacity = 1, listening = false, scale = 1 }) {
+    async drawImage(name, { src, x, y, opacity = 1, listening = false, scale = 1, stroke = null, strokeWidth = 0, overlayPolygon = null }) {
         RendererUI.removeImage(name);
         const img = await new Promise((res, rej) => {
             const i = new Image();
@@ -460,21 +554,41 @@ export const RendererUI = {
             offsetY: img.height / 2,
             scaleX: scale, scaleY: scale,
             opacity, listening,
+            stroke, strokeWidth,
             name: `img-${name}`,
         });
         uiLayer.add(node);
+        // Опциональный многоугольник поверх картинки — например кантик вокруг круглой гифки.
+        // overlayPolygon: { sides, radius, rotation?, stroke, strokeWidth }
+        if (overlayPolygon) {
+            const poly = new Konva.RegularPolygon({
+                x: node.x(), y: node.y(),
+                sides: overlayPolygon.sides,
+                radius: overlayPolygon.radius,
+                rotation: overlayPolygon.rotation ?? 0,
+                stroke: overlayPolygon.stroke, strokeWidth: overlayPolygon.strokeWidth,
+                listening: false,
+                name: `img-${name}-overlay`,
+            });
+            uiLayer.add(poly);
+        }
         uiLayer.batchDraw();
     },
 
     removeImage(name) {
-        const node = uiLayer.findOne(`.img-${name}`);
-        if (node) { node.destroy(); uiLayer.batchDraw(); }
+        const node    = uiLayer.findOne(`.img-${name}`);
+        const overlay = uiLayer.findOne(`.img-${name}-overlay`);
+        if (node)    node.destroy();
+        if (overlay) overlay.destroy();
+        uiLayer.batchDraw();
     },
 
     rotateImage(name, delta) {
-        const node = uiLayer.findOne(`.img-${name}`);
+        const node    = uiLayer.findOne(`.img-${name}`);
+        const overlay = uiLayer.findOne(`.img-${name}-overlay`);
         if (!node) return;
         node.to({ rotation: node.rotation() + delta, duration: 0.4 });
+        if (overlay) overlay.to({ rotation: overlay.rotation() + delta, duration: 0.4 });
     },
 
     // Показывает соответствующий значок стороны (axis или allied) поверх крутилки.
@@ -490,7 +604,12 @@ export const RendererUI = {
     fadeButton(label) {
         const btn = uiLayer?.findOne(`.btn-${label}`);
         if (!btn) return;
-        btn.opacity(0.5);
+        // Серый тон + снятие кантика — «мёртвая» кнопка.
+        const rect = btn.findOne('Rect');
+        const text = btn.findOne('Text');
+        if (rect) { rect.fill('#555'); rect.stroke(null); rect.strokeWidth(0); }
+        if (text) text.fill('#888');
+        btn.opacity(0.6);
         btn.listening(false);
         uiLayer.batchDraw();
     },

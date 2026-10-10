@@ -14,10 +14,18 @@ function createContext(e) {
     const ccPanel     = e.target.getParent()?.getAttr('ccPanel') === true;
     // transferPanel — клик по элементу transfer-панели (RPh, uiLayer).
     const transferPanel = e.target.getParent()?.getAttr('transferPanel') === true;
-    // Setup: клик пришёлся в область панели — либо прямо по фону-подложке (Konva.Rect name='setupPanel'),
-    // либо по юниту, который сейчас в пуле (u.inSetupPool === true).
+    // Юнит, по которому пришёл клик (если это юнит).
     const clickedUnit = State.units[unitId];
-    const clickedSetupPanel = e.target.name?.() === 'setupPanel' || clickedUnit?.inSetupPool === true;
+
+    // Клик = в область setup-панели, если:
+    //   - прямо по фону-подложке (Konva.Rect name='setupPanel'), ИЛИ
+    //   - по пул-юниту, который НЕ в выделении (стоит в панели, не липнет к курсору).
+    let clickedSetupPanel = false;
+    if (e.target.name() === 'setupPanel') {
+        clickedSetupPanel = true;
+    } else if (clickedUnit?.inSetupPool && !State.setupSelectedUnits.includes(unitId)) {
+        clickedSetupPanel = true;
+    }
     // мировые координаты клика (учитываем сдвиг stage от скроллинга WASD)
     const stage       = e.target.getStage();
     const raw         = stage.getPointerPosition();
@@ -64,7 +72,7 @@ const RULES = [
             leftClick:    c=>c.button!==2,
             onPanel:      c=>c.clickedSetupPanel,
             notUnit:      c=>c.unitId === undefined,
-            hasSelOnMap:  ()=>State.setupSelectedUnit && State.units[State.setupSelectedUnit].inSetupPool === false,
+            hasSelOnMap:  ()=>State.setupSelectedUnits.length > 0 && State.units[State.setupSelectedUnits[0]].inSetupPool === false,
         }],
         name: 'SetupReturnToPool'
     },
@@ -77,8 +85,8 @@ const RULES = [
             isOwnOnMap:   c=>State.units[c.unitId]?.category === 'infantry'
                           && State.units[c.unitId]?.side === State.setupSide
                           && State.units[c.unitId]?.hex,
-            selWeapon:    ()=>State.setupSelectedUnit
-                          && State.units[State.setupSelectedUnit]?.category === 'carried',
+            selWeapon:    ()=>State.setupSelectedUnits.length === 1
+                          && State.units[State.setupSelectedUnits[0]]?.category === 'carried',
         }],
         name: 'SetupAttachWeapon'
     },
@@ -89,7 +97,7 @@ const RULES = [
             phaseIsSetup: ()=>PhaseManager.getPhase()==='setup',
             leftClick:    c=>c.button!==2,
             notPanel:     c=>!c.clickedSetupPanel,
-            hasSelected:  ()=>State.setupSelectedUnit !== null,
+            hasSelected:  ()=>State.setupSelectedUnits.length > 0,
         }],
         name: 'SetupPlaceOrMoveOnHex'
     },
@@ -661,6 +669,47 @@ export function interpretEvent(e) {
     }
 
     Engine.execute({ name: rule.name, ctx:ctx }); // → { name: 'SELECT_UNIT', unitId: ..., pos: ... }
+}
+
+// Dbl-клик по юниту на карте: группируем всех соседей гекса в MG (MPh) или FG (фазы огня).
+// В остальных фазах — ничего. По пустому месту или кнопке — ничего.
+export function interpretDblClickEvent(e) {
+    const unitId = e.target.getAttr('unitId');
+    if (!unitId) return;
+    const u = State.units[unitId];
+    if (!u) return;
+    // В setup пул-юниты имеют hex=null — им dblclick нужен; в остальных фазах юнит без hex не ожидается.
+    const phase = PhaseManager.getPhase();
+    if (phase === 'movement') {
+        // Attacker — свой MG; Defender — DFF (fireGroup для defensive first fire).
+        if (u.side === 'attacker')      Engine.handlers.dblClickAddingToMovingGroup(u);
+        else if (u.side === 'defender') Engine.handlers.dblClickAddingToFireGroup(u);
+    } else if (phase === 'prepFire' || phase === 'defensiveFire' || phase === 'advancingFire') {
+        Engine.handlers.dblClickAddingToFireGroup(u);
+    } else if (phase === 'setup') {
+        Engine.handlers.dblClickSetupSelect(u);
+    }
+}
+
+// Групповой выбор через lasso: прошли по hex'ам прямоугольника, в каждом применяем правила текущей фазы.
+// Переиспользуем существующие dblClick-хендлеры — они сами итерируют hex и фильтруют валидаторами.
+export function interpretLassoRelease(hexes) {
+    const phase = PhaseManager.getPhase();
+    for (const hex of hexes) {
+        const unitsInHex = Object.values(State.units).filter(u => u.hex && isSameHex(u.hex, hex));
+        if (unitsInHex.length === 0) continue;
+        if (phase === 'movement') {
+            // В MPh: attacker → MG; defender → FG (DFF). Берём первого юнита нужной стороны.
+            const atk = unitsInHex.find(u => u.side === 'attacker');
+            const def = unitsInHex.find(u => u.side === 'defender');
+            if (atk) Engine.handlers.dblClickAddingToMovingGroup(atk);
+            if (def) Engine.handlers.dblClickAddingToFireGroup(def);
+        } else if (phase === 'prepFire' || phase === 'defensiveFire' || phase === 'advancingFire') {
+            const firingSide = (phase === 'prepFire' || phase === 'advancingFire') ? 'attacker' : 'defender';
+            const anyFiring = unitsInHex.find(u => u.side === firingSide);
+            if (anyFiring) Engine.handlers.dblClickAddingToFireGroup(anyFiring);
+        }
+    }
 }
 
 export function interpretKeyEvent(e) {

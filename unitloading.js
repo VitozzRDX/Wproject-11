@@ -2,6 +2,10 @@ import { State } from './state.js';
 import { hexToPixel } from './hexUtils.js';
 import { Rules } from './rules.js';
 
+// Отрисованный размер юнита (в пикселях на сцене). Исходные гифки — 48×48;
+// 46 даёт ~5% уменьшение. Все оверлеи, стакинг и центрирование используют эту константу.
+export const UNIT_IMAGE_SIZE = 46;
+
 // ---------------------------------------------------------------------------
 // Цепочка наследования — единая для юнитов и оружия
 // ---------------------------------------------------------------------------
@@ -12,7 +16,7 @@ const Infantry         = { ...Unit, category: 'infantry',
                                     broken: false,        // morale-broken (провалил MC, в rout)
                                     hasStartedMoving: false, movementCompleted: false,
                                     leaderBonus: 0, roadBonus: 1, usedWoodsRoad: false,
-                                    pinned: false, wounded: false, exhausted: false,
+                                    pinned: false, wounded: false, exhausted: false, wasExhaustedLastTurn: false,
                                     doubleTime: false, assaultMovement: false,
                                     desperationMorale: false,
                                     mf_spent_in_current_hex: 0,
@@ -108,7 +112,7 @@ export const TEMPLATES = {
   // American squads / HS (elr=20 explicit — не подвержены quality reduce в этом сценарии)
   'am_667': { ...AmericanSquad, quality: 'Elite',   firepower: 6, range: 6, morale: 7, brokenMorale: 7, smokeExponent: 3, elr: 20, lowerQuality: null, halfSquad: 'am_347', selfRally: true, src: './graf/am667S.gif', brokenSrc: './graf/amc7b.gif' },
   'am_347': { ...AmericanSquad, quality: 'Elite',   firepower: 3, range: 4, morale: 7, brokenMorale: 7, size: 'halfSquad', src: './graf/am347H.gif', brokenSrc: './graf/amc7b.gif' },
-  'am_536': { ...AmericanSquad, quality: '2ndLine', firepower: 5, range: 3, morale: 6, brokenMorale: 6, elr: 20, lowerQuality: null, halfSquad: 'am_226', src: './graf/am536S.gif', brokenSrc: './graf/amh6b.gif' },
+  'am_536': { ...AmericanSquad, quality: '2ndLine', firepower: 5, range: 3, morale: 6, brokenMorale: 6, smokeExponent: 2, elr: 20, lowerQuality: null, halfSquad: 'am_226', src: './graf/am536S.gif', brokenSrc: './graf/amh6b.gif' },
   'am_226': { ...AmericanSquad, quality: '2ndLine', firepower: 2, range: 2, morale: 6, brokenMorale: 6, size: 'halfSquad', src: './graf/am226H.gif', brokenSrc: './graf/amh6b.gif' },
 
   // American leaders
@@ -169,42 +173,66 @@ export function preloadAllTemplateImages() {
 // ---------------------------------------------------------------------------
 async function createUnit(data, layer) {
 
-  const w = data.image.width;
-  const h = data.image.height;
+  // Scenario-override: если текущий сценарий отключает smoke для этого templateId — обнуляем SE.
+  // Применяется единожды на входе — независимо от пути (setup, scenario-snapshot, HS-замена, respawn).
+  if (State.currentScenario?.disableSmoke?.includes(data.templateId)) {
+      data.smokeExponent = null;
+  }
+
+  // Все оверлеи рассчитываются от единой константы UNIT_IMAGE_SIZE — чтобы сохранять пропорции
+  // (эталон 48×48). Коэффициенты ниже выведены из текущих значений оверлеев.
+  const w = UNIT_IMAGE_SIZE;
+  const h = UNIT_IMAGE_SIZE;
+  const stripeH        = Math.round(h * 0.167);   // полоса moved/active/ff/af (8 при h=48)
+  const stripeFont     = Math.round(h * 0.146);   // текст на полосе (7)
+  const cxOffset       = Math.round(w * 0.25);    // смещение CX от правого края (12)
+  const cxFont         = Math.round(h * 0.167);   // 8
+  const pinW           = Math.round(w * 0.375);   // 18
+  const pinH           = Math.round(h * 0.208);   // 10
+  const pinFont        = Math.round(h * 0.167);   // 8
+  const dmWidth        = Math.round(w * 0.708);   // 34
+  const dmFont         = Math.round(h * 0.188);   // 9
+  const woundCrossFont = Math.round(h * 0.25);    // 12
+  const kiaSize        = Math.round(h * 0.333);   // 16
 
   // группа = картинка + индикатор moved
   const group = new Konva.Group({ x: data.x, y: data.y });
-  const image = new Konva.Image({ image: data.image, x: 0, y: 0 });
-  
+  const image = new Konva.Image({
+    image: data.image, x: 0, y: 0, width: w, height: h,
+    // Тень без блюра — создаёт приподнятость стопки; у юнитов снизу падает на hex-фон.
+    // Тень падает ↘ — вниз-право.
+    shadowColor: 'black', shadowOffsetX: 1, shadowOffsetY: 1, shadowOpacity: 0.5,
+  });
+
   const movedRect = new Konva.Rect({
-    x: 0, y: h - 8,
-    width: w, height: 8,
+    x: 0, y: h - stripeH,
+    width: w, height: stripeH,
     fill: 'red',
     visible: false,
     name: 'movedRect',
   });
 
   const movedText = new Konva.Text({
-    x: 0, y: h - 8,
-    width: w, height: 8,
-    text: 'moved', fill: 'white', fontSize: 7,
+    x: 0, y: h - stripeH,
+    width: w, height: stripeH,
+    text: 'moved', fill: 'white', fontSize: stripeFont,
     align: 'center', verticalAlign: 'middle',
     visible: false,
     name: 'movedText',
   });
 
   const activeRect = new Konva.Rect({
-    x: 0, y: h - 8,
-    width: w, height: 8,
+    x: 0, y: h - stripeH,
+    width: w, height: stripeH,
     fill: 'goldenrod',
     visible: false,
     name: 'activeRect',
   });
 
   const activeText = new Konva.Text({
-    x: 0, y: h - 8,
-    width: w, height: 8,
-    text: 'active', fill: 'white', fontSize: 7,
+    x: 0, y: h - stripeH,
+    width: w, height: stripeH,
+    text: 'active', fill: 'white', fontSize: stripeFont,
     align: 'center', verticalAlign: 'middle',
     visible: false,
     name: 'activeText',
@@ -252,8 +280,8 @@ const addToFireGroupRect = new Konva.Rect({
 });
 
 const cxText = new Konva.Text({
-    x: w - 12, y: 1,
-    text: 'CX', fill: 'red', fontSize: 8, fontStyle: 'bold',
+    x: w - cxOffset, y: 1,
+    text: 'CX', fill: 'red', fontSize: cxFont, fontStyle: 'bold',
     visible: false,
     name: 'cxText',
     listening: false,
@@ -261,7 +289,7 @@ const cxText = new Konva.Text({
 
 const pinBg = new Konva.Rect({
     x: 0, y: 0,
-    width: 18, height: 10,
+    width: pinW, height: pinH,
     fill: 'white',
     visible: false,
     name: 'pinBg',
@@ -270,16 +298,16 @@ const pinBg = new Konva.Rect({
 
 const pinText = new Konva.Text({
     x: 1, y: 1,
-    text: 'pin', fill: 'red', fontSize: 8, fontStyle: 'bold',
+    text: 'pin', fill: 'red', fontSize: pinFont, fontStyle: 'bold',
     visible: false,
     name: 'pinText',
     listening: false,
 });
 
 const dmText = new Konva.Text({
-    x: (w - 34) / 2, y: (h - 12) / 2 + 2,
-    width: 34, height: 8,
-    text: 'DM+4', fill: 'red', fontSize: 9, fontStyle: 'bold',
+    x: (w - dmWidth) / 2, y: (h - stripeH) / 2 + 2,
+    width: dmWidth, height: stripeH,
+    text: 'DM+4', fill: 'red', fontSize: dmFont, fontStyle: 'bold',
     align: 'center', verticalAlign: 'middle',
     visible: false,
     name: 'dmText',
@@ -288,7 +316,7 @@ const dmText = new Konva.Text({
 
 const woundedRect = new Konva.Rect({
     x: 0, y: 0,
-    width: w, height: 8,
+    width: w, height: stripeH,
     fill: 'white',
     visible: false,
     name: 'woundedRect',
@@ -296,15 +324,15 @@ const woundedRect = new Konva.Rect({
 });
 const woundedCross = new Konva.Text({
     x: 1, y: -2,
-    text: '+', fill: 'red', fontSize: 12, fontStyle: 'bold',
+    text: '+', fill: 'red', fontSize: woundCrossFont, fontStyle: 'bold',
     visible: false,
     name: 'woundedCross',
     listening: false,
 });
 const woundedText = new Konva.Text({
     x: 0, y: 0,
-    width: w, height: 8,
-    text: 'wound', fill: 'red', fontSize: 7, fontStyle: 'bold',
+    width: w, height: stripeH,
+    text: 'wound', fill: 'red', fontSize: stripeFont, fontStyle: 'bold',
     align: 'center', verticalAlign: 'middle',
     visible: false,
     name: 'woundedText',
@@ -312,17 +340,17 @@ const woundedText = new Konva.Text({
 });
 
 const ffRect = new Konva.Rect({
-    x: 0, y: h - 8,
-    width: w, height: 8,
+    x: 0, y: h - stripeH,
+    width: w, height: stripeH,
     fill: 'white',
     visible: false,
     name: 'ffRect',
     listening: false,
 });
 const ffText = new Konva.Text({
-    x: 0, y: h - 8,
-    width: w, height: 8,
-    text: 'first fire', fill: 'red', fontSize: 7, fontStyle: 'bold',
+    x: 0, y: h - stripeH,
+    width: w, height: stripeH,
+    text: 'first fire', fill: 'red', fontSize: stripeFont, fontStyle: 'bold',
     align: 'center', verticalAlign: 'middle',
     visible: false,
     name: 'ffText',
@@ -349,17 +377,17 @@ const pfText = new Konva.Text({
 });
 
 const afRect = new Konva.Rect({
-    x: 0, y: h - 8,
-    width: w, height: 8,
+    x: 0, y: h - stripeH,
+    width: w, height: stripeH,
     fill: 'white',
     visible: false,
     name: 'afRect',
     listening: false,
 });
 const afText = new Konva.Text({
-    x: 0, y: h - 8,
-    width: w, height: 8,
-    text: 'fired', fill: 'red', fontSize: 7, fontStyle: 'bold',
+    x: 0, y: h - stripeH,
+    width: w, height: stripeH,
+    text: 'fired', fill: 'red', fontSize: stripeFont, fontStyle: 'bold',
     align: 'center', verticalAlign: 'middle',
     visible: false,
     name: 'afText',
@@ -367,9 +395,9 @@ const afText = new Konva.Text({
 });
 
 const kiaText = new Konva.Text({
-    x: 0, y: (h - 16) / 2,
-    width: w, height: 16,
-    text: 'KIA', fill: 'red', fontSize: 16, fontStyle: 'bold',
+    x: 0, y: (h - kiaSize) / 2,
+    width: w, height: kiaSize,
+    text: 'KIA', fill: 'red', fontSize: kiaSize, fontStyle: 'bold',
     align: 'center', verticalAlign: 'middle',
     visible: false,
     name: 'kiaText',
@@ -454,8 +482,8 @@ export async function createAndLoadUnits(layer, scenarioUnits) {
         // Если юнит стартует broken — отдельно показываем broken-спрайт в Konva.Image.
         const image    = await loadImage(template.src);
         const { x, y } = hexToPixel(resolvedHex.col, resolvedHex.row);
-        const cx       = x - image.width  / 2;
-        const cy       = y - image.height / 2;
+        const cx       = x - UNIT_IMAGE_SIZE / 2;   // центруем по отрисованному размеру, а не native
+        const cy       = y - UNIT_IMAGE_SIZE / 2;
         await createUnit({ ...template, image, x: cx, y: cy }, layer);
         if (template.broken && tmpl.brokenSrc) {
             // brokenImage уже лежит на юните (загружен внутри createUnit); для broken-at-start
@@ -491,7 +519,7 @@ export async function spawn_unit(templateId, id, hex, layer, side = null) {
     template.elr   = template.lowerQuality ? (State.elr[template.nation] ?? 3) : 20;
     const image    = await loadImage(template.src);
     const { x, y } = hex ? hexToPixel(hex.col, hex.row) : { x: 0, y: 0 };   // пул: позицию ставит setupPhase.refreshSetupPanel
-    const cx       = x - image.width / 2;
-    const cy       = y - image.height / 2;
+    const cx       = x - UNIT_IMAGE_SIZE / 2;   // центруем по отрисованному размеру
+    const cy       = y - UNIT_IMAGE_SIZE / 2;
     return await createUnit({ ...template, image, x: cx, y: cy }, layer);
 }

@@ -48,6 +48,23 @@ export const COL_COUNT = Math.ceil(BOARD_W / COL_STEP);
 export const ROW_COUNT = Math.ceil(WORLD_H / HEX_H);
 
 
+// Все гексы, у которых bounding-box (центр ± R) пересекается с прямоугольником.
+// rect: {x, y, w, h} в мировых координатах. Используется для lasso-выделения.
+export function hexesInRect(rect) {
+    const hexes = [];
+    const left = rect.x, right = rect.x + rect.w;
+    const top  = rect.y, bottom = rect.y + rect.h;
+    for (let col = 0; col < 2 * COL_COUNT - 1; col++) {
+        for (let row = 1; row <= ROW_COUNT + 1; row++) {
+            const { x, y } = hexToPixel(col, row);
+            if (x + R < left || x - R > right)  continue;
+            if (y + R < top  || y - R > bottom) continue;
+            hexes.push({ col, row });
+        }
+    }
+    return hexes;
+}
+
 // Пиксель → новые координаты (col-row в единой системе, origin над uB1 = "0-1").
 // Внутри работаем в старой системе (old_col in [-COL_COUNT, COL_COUNT-1], old_row in [1, ROW_COUNT]),
 // потом сдвигаем: new_col = old_col + COL_COUNT − 1; new_row = old_row + 1.

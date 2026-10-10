@@ -11,6 +11,7 @@ import { recalculateHexInstant } from './positioning.js';
 import { scenarios } from './scenarios.js';
 import { refreshSetupPanel, refreshEndSetupSideButton } from './setupPhase.js';
 import { refreshSideBadge } from './main.js';
+import { refreshSetupBoundsHighlight } from './engine.js';
 
 const KEY = 'wproject11.save';
 
@@ -30,7 +31,7 @@ const STATE_FIELDS = [
     'ccDefenderDeclaring', 'ambushSide', 'ccAmbushRound',
     'movementGroup', 'fireGroup', 'fireGroupHexesArray', 'fired_from_on_target_in_hex',
     // setup-фаза
-    'setupSide', 'idsInSetupPool', 'setupSelectedUnit', 'setupDiceRolled',
+    'setupSide', 'idsInSetupPool', 'setupSelectedUnits', 'setupDiceRolled',
 ];
 
 // Поля юнита, которые НЕ сохраняем — Konva-ноды и Map/Set, не JSON-сериализуются.
@@ -56,7 +57,13 @@ export function save() {
     // JSON.stringify превращает объект в строку вида '{"phase":"movement","units":{...}}'.
     // localStorage хранит только строки.
     localStorage.setItem(KEY, JSON.stringify(snapshot));
+    UIState.redrawButton('Load');   // кнопка Load могла быть гашена из-за отсутствия сейва — переподнимаем
     console.log('[save] snapshot saved');
+}
+
+// Есть ли сохранёнка в localStorage.
+export function hasSave() {
+    return localStorage.getItem(KEY) !== null;
 }
 
 function _buildSnapshot() {
@@ -108,16 +115,40 @@ export async function load() {
     await _respawnUnits(snapshot);
     _restackHexes();
     _restoreUI(snapshot);
+    // addImage асинхронный — rotateImage до создания ноды был бы no-op. Отложим на tick.
+    setTimeout(() => _restoreTurnphaseRotation(snapshot.phase), 50);
     _restoreSetupPanelIfNeeded(snapshot);
+    _restoreSetupBoundsHighlightIfNeeded(snapshot);
+    _restoreSmokeVisuals();
 
     console.log('[load] snapshot loaded');
+}
+
+// Пере-отрисовать дым из State.dynamicTerrain. State поле восстановлено, но clearAll уничтожил
+// визуальные ноды — нужно заново дёрнуть setSmoke для каждого hex с тегом 'smoke'.
+function _restoreSmokeVisuals() {
+    for (const [key, tags] of Object.entries(State.dynamicTerrain ?? {})) {
+        if (!tags.includes('smoke')) continue;
+        const [col, row] = key.split('-').map(Number);
+        UIState.setSmoke({ col, row });
+    }
 }
 
 // Снести текущие кнопки, картинки и визуальные остатки (LOS, residual, крутилка, значки, оверлеи).
 function _clearCurrentUI() {
     for (const b of Object.keys(UIState.buttons))      UIState.removeButton(b);
     for (const n of Object.keys(UIState.images ?? {})) UIState.removeImage(n);
+    RendererUI.removeSetupPanel();   // Konva.Rect name='setupPanel' — clearAll его не чистит
     RendererUI.clearAll();
+}
+
+// Крутилка turnphase поворачивается на -45° за фазу (engine.NextPhase). После load переустанавливаем
+// поворот явно, т.к. он хранится на Konva-ноде, а при restoreUI создаётся новая нода с rotation=0.
+const PHASES_ORDER = ['rally', 'prepFire', 'movement', 'defensiveFire', 'advancingFire', 'rout', 'advance', 'closeCombat'];
+function _restoreTurnphaseRotation(phase) {
+    const idx = PHASES_ORDER.indexOf(phase);
+    if (idx <= 0) return;   // Rally = 0, по умолчанию
+    UIState.rotateImage('turnphase', idx * -45);
 }
 
 // Восстановить кнопки и картинки из snapshot и выставить активный бок-значок.
@@ -196,4 +227,11 @@ function _restoreSetupPanelIfNeeded(snapshot) {
     if (snapshot.phase !== 'setup') return;
     refreshSetupPanel();
     refreshEndSetupSideButton();
+}
+
+// Если грузимся в setup-фазу и был выделен юнит — пересчитать подсветку легальной зоны.
+function _restoreSetupBoundsHighlightIfNeeded(snapshot) {
+    if (snapshot.phase !== 'setup') return;
+    if (State.setupSelectedUnits.length === 0) return;   // в save нет выделения — подсвечивать нечего
+    refreshSetupBoundsHighlight();
 }

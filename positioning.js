@@ -1,7 +1,8 @@
 import { State } from './state.js';
 import { hexToPixel, isSameHex } from './hexUtils.js';
+import { UNIT_IMAGE_SIZE } from './unitloading.js';
 
-const STEP = 6;   // сдвиг между сущностями в стеке (px)
+const STEP = Math.round(UNIT_IMAGE_SIZE * 0.125);   // сдвиг между сущностями в стеке (6 при 48)
 
 // Порядок стека (снизу вверх):
 //   1) carried без possessor'а — на самом дне
@@ -39,13 +40,23 @@ export function recalculateHexInstant(hex) {
     const center = hexToPixel(hex.col, hex.row);
     stack.forEach((unit, index) => {
         const offset = index - (stack.length - 1) / 2;
-        const nx = center.x + STEP * offset - unit.image.width  / 2;
-        const ny = center.y - STEP * offset - unit.image.height / 2;
+        const nx = center.x + STEP * offset - UNIT_IMAGE_SIZE / 2;
+        const ny = center.y - STEP * offset - UNIT_IMAGE_SIZE / 2;
         unit.x = nx;
         unit.y = ny;
         unit.node.position({ x: nx, y: ny });
         unit.node.moveToTop();
     });
+}
+
+// Восстановить z-порядок стопки для юнита (используется при снятии hover-raise).
+// Для юнита на карте — переупорядочивает стек в его hex'е; для пул-юнита (hex=null) — ничего не делает.
+export function restoreUnitZ(unitId) {
+    const u = State.units[unitId];
+    if (!u || !u.hex) return;
+    const stack = _stackOrder(u.hex);
+    stack.forEach(unit => unit.node.moveToTop());
+    if (stack.length) stack[0].node.getLayer()?.batchDraw();
 }
 
 export function recalculateHex(hex) {

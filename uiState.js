@@ -39,6 +39,15 @@ export const UIState = {
         this.subscribers.forEach(sub => sub('fadeButton', label));
     },
 
+    // Перерисовать кнопку с нуля по уже сохранённому def'у — «восстановить» после fadeButton.
+    // Шлём событие 'add' повторно: rendererUI вызовет drawButton, который сначала удалит старую
+    // (возможно затушёванную) ноду, затем создаст свежую с исходными цветами и кантиком.
+    redrawButton(label) {
+        const def = this.buttons[label];
+        if (!def) return;
+        this.subscribers.forEach(sub => sub('add', label, def));
+    },
+
     // bounds: {x, y, w, h} — rendererUI рисует Konva.Rect-подложку с этими размерами.
     showSetupPanel(bounds) {
         this.subscribers.forEach(sub => sub('showSetupPanel', null, { bounds }));
@@ -46,6 +55,19 @@ export const UIState = {
 
     hideSetupPanel() {
         this.subscribers.forEach(sub => sub('hideSetupPanel', null, {}));
+    },
+
+    // hexes: массив {col,row} — подсветка легальной зоны расстановки для выбранного юнита.
+    setSetupBounds(hexes) {
+        this.subscribers.forEach(sub => sub('setSetupBounds', null, { hexes }));
+    },
+
+    // Пара d6 — colored (красный) и white. Отображается под крутилкой; клик скрывает.
+    showDice(colored, white) {
+        this.subscribers.forEach(sub => sub('showDice', null, { colored, white }));
+    },
+    hideDice() {
+        this.subscribers.forEach(sub => sub('hideDice', null, {}));
     },
 
     subscribe(handler) {

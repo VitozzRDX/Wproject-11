@@ -1,15 +1,15 @@
 import { State } from './state.js';
 import { Rules } from './rules.js';
 import { PhaseManager } from './phase_manager.js';
-import { pixelToHex, hexToPixel, hexLabel, hexDistance, isSameHex, isAdjacent, calcNearestHexes, bfsHexes, dijkstraHexes, reconstructPath } from './hexUtils.js';
+import { pixelToHex, hexToPixel, hexLabel, hexDistance, isSameHex, isAdjacent, calcNearestHexes, bfsHexes, dijkstraHexes, reconstructPath, COL_COUNT, ROW_COUNT } from './hexUtils.js';
 import { terrainAt } from './cards.js';
 import { UIState } from './uiState.js';
 import { spawn_unit } from './unitloading.js';
 import { getLastHit } from './terrainLOS.js';
-import { flipReplaceUnit, raiseToTop } from './renderer.js';
-import { recalculateHex } from './positioning.js';
+import { flipReplaceUnit, raiseToTop, shakeNode } from './renderer.js';
+import { recalculateHex, recalculateHexInstant } from './positioning.js';
 import { save, load } from './saveLoad.js';
-import { initSetupSide, applyDiceRoll, placeFromPool, returnToPool, instantUnitMoveFromHexToHex } from './setupPhase.js';
+import { initSetupSide, applyDiceRoll, placeFromPool, returnToPool, instantUnitMoveFromHexToHex, refreshSetupPanel } from './setupPhase.js';
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
@@ -32,6 +32,25 @@ const handlers = {
         _addToFireGroup(ctx.unitId);
     },
 
+    // Dbl-клик по инфантри в MPh — добавляем всех инфантри своей стороны этого гекса в MG.
+    // Оружие не трогаем — оно переедет вместе с possessor'ом.
+    dblClickAddingToMovingGroup: (unit) => {
+        if (unit.side !== 'attacker') return;   // MPh — только attacker
+        for (const u of _ownUnitsInHex(unit.hex, 'attacker', ['infantry'])) {
+            _addToMovementGroup(u.id);
+        }
+    },
+
+    // Dbl-клик в фазу огня — добавляем всех юнитов своей стороны (инфантри + оружие) в FG.
+    dblClickAddingToFireGroup: (unit) => {
+        const phase = PhaseManager.getPhase();
+        const firingSide = (phase === 'prepFire' || phase === 'advancingFire') ? 'attacker' : 'defender';
+        if (unit.side !== firingSide) return;
+        for (const u of _ownUnitsInHex(unit.hex, firingSide, ['infantry', 'carried'])) {
+            _addToFireGroup(u.id);
+        }
+    },
+
     Save: () => save(),
     Load: async () => { await load(); },
 
@@ -42,42 +61,56 @@ const handlers = {
         applyDiceRoll(roll);
     },
 
-    // Setup: клик по own-юниту (в пуле или на карте) при отсутствии выбора — выбрать его.
+    // Setup: клик по own-юниту (в пуле или на карте) — одиночный выбор.
     SetupToggleSelect: (ctx) => {
         const newId = ctx.unitId;
-        const prev = State.setupSelectedUnit;
-        if (prev === newId) return;
-        if (prev) State.setUnit(prev, 'selectedForSetup', false);
-        State.setupSelectedUnit = newId;
+        if (State.setupSelectedUnits.includes(newId)) return;   // тот же — ничего
+        _clearSetupSelection();
+        State.setupSelectedUnits = [newId];
         State.setUnit(newId, 'selectedForSetup', true);
+        refreshSetupBoundsHighlight();
     },
 
-    // Setup: клик по гексу при выбранном юните. Юнит в пуле → поставить, на карте → перенести.
-    // Проверяем занят ли гекс противником и влезет ли по правилам стакинга (макс 3 отряда / 4 лидера).
+    // Setup: dblclick в пуле — выбрать до 3 юнитов того же templateId. На карте не работает.
+    // Оружие (carried) пропускаем — оно по одному, батч не нужен.
+    dblClickSetupSelect: (unit) => {
+        if (!unit.inSetupPool) return;
+        if (unit.category === 'carried') return;
+        const tpl = unit.templateId;
+        const picks = State.idsInSetupPool
+            .filter(id => State.units[id].templateId === tpl)
+            .slice(0, 3);
+        _clearSetupSelection();
+        State.setupSelectedUnits = picks;
+        for (const id of picks) State.setUnit(id, 'selectedForSetup', true);
+        refreshSetupBoundsHighlight();
+        console.log(`[Setup] dbl-select ${picks.length} × ${tpl}`);
+    },
+
+    // Setup: клик по гексу при выбранных юнитах. Пул → поставить всех; карта (1 юнит) → перенести.
+    // Проверяем занят ли гекс противником и влезет ли по правилам стакинга (макс 3 отряда).
     SetupPlaceOrMoveOnHex: (ctx) => {
         const hex = pixelToHex(ctx.pos.x, ctx.pos.y);
-        const uid = State.setupSelectedUnit;
-        if (!_canPlaceAtHex(uid, hex)) return;   // отказ — выделение сохраняется
-        const u = State.units[uid];
-        const inPool = u.inSetupPool;
-        State.setUnit(uid, 'selectedForSetup', false);
-        State.setupSelectedUnit = null;
-        if (inPool) placeFromPool(uid, hex);
-        else        instantUnitMoveFromHexToHex(uid, hex);
-        console.log(`[Setup] ${inPool ? 'placed' : 'moved'} ${uid} → (${hex.col},${hex.row})`);
+        const uids = State.setupSelectedUnits;
+        if (!_canPlaceAtHex(uids, hex)) return;   // отказ — выделение сохраняется
+        for (const uid of uids) {
+            const u = State.units[uid];
+            if (u.inSetupPool) placeFromPool(uid, hex);
+            else               instantUnitMoveFromHexToHex(uid, hex);
+        }
+        console.log(`[Setup] placed/moved ${uids.length} unit(s) → (${hex.col},${hex.row})`);
+        _clearSetupSelection();
     },
 
-    // Setup: прикрепить выбранное оружие к инфантри (установка possessorId).
-    // Если оружие было в пуле — выносим его в hex инфантри; если на карте в другом hex'е — переносим;
-    // если в том же hex'е — только меняем possessorId.
+    // Setup: прикрепить выбранное оружие к инфантри (работает только для одного выбранного).
     SetupAttachWeapon: (ctx) => {
-        const weaponId = State.setupSelectedUnit;
+        if (State.setupSelectedUnits.length !== 1) return;
+        const weaponId = State.setupSelectedUnits[0];
         const infantryId = ctx.unitId;
         const weapon = State.units[weaponId];
         const infantry = State.units[infantryId];
         weapon.possessorId = infantryId;
-        State.setUnit(weaponId, 'selectedForSetup', false);
-        State.setupSelectedUnit = null;
+        _clearSetupSelection();
         if (weapon.inSetupPool) {
             placeFromPool(weaponId, infantry.hex);
         } else if (!isSameHex(weapon.hex, infantry.hex)) {
@@ -87,10 +120,10 @@ const handlers = {
     },
 
     // Setup: клик по фону панели + выбранный юнит на карте → вернуть в пул.
+    // Dblclick в карту не работает, поэтому выбор на карте всегда 1 юнит.
     SetupReturnToPool: () => {
-        const uid = State.setupSelectedUnit;
-        State.setUnit(uid, 'selectedForSetup', false);
-        State.setupSelectedUnit = null;
+        const uid = State.setupSelectedUnits[0];
+        _clearSetupSelection();
         returnToPool(uid);
         console.log(`[Setup] returned ${uid} to pool`);
     },
@@ -99,10 +132,7 @@ const handlers = {
         const first = State.currentScenario.setup.whoSetsUpFirst;
         const current = State.setupSide;
         UIState.removeButton('EndSetupSide');
-        if (State.setupSelectedUnit) {
-            State.setUnit(State.setupSelectedUnit, 'selectedForSetup', false);
-            State.setupSelectedUnit = null;
-        }
+        if (State.setupSelectedUnits.length > 0) _clearSetupSelection();
         if (current === first) {
             // Текущая сторона — та, что ходила первой. Переключаемся на вторую.
             const nextSide = first === 'defender' ? 'attacker' : 'defender';
@@ -112,6 +142,7 @@ const handlers = {
             State.setupSide = null;
             State.idsInSetupPool = [];
             UIState.hideSetupPanel();
+            UIState.addButton('NextPhase', { x: 10, y: 10, label: 'NextPhase' });
             PhaseManager.setPhase('rally');
             console.log('[Setup] done → rally');
         }
@@ -191,10 +222,9 @@ const handlers = {
             State.advanceSelected = null;
             return;
         }
-        // Setup: сбросить выбранного (из пула или с карты).
-        if (State.setupSelectedUnit) {
-            State.setUnit(State.setupSelectedUnit, 'selectedForSetup', false);
-            State.setupSelectedUnit = null;
+        // Setup: сбросить выбранных (из пула или с карты).
+        if (State.setupSelectedUnits.length > 0) {
+            _clearSetupSelection();
             return;
         }
     },
@@ -763,6 +793,10 @@ const handlers = {
         UIState.rotateImage('turnphase', -45);   // 1/8 оборота против часовой (одна грань)
         console.log(`[phase] → ${p}`);
 
+        // Начало MPh (A8.2): CX снимается с attacker-юнитов, но переносим его в флаг-память,
+        // чтобы в этой MPh заблокировать DT тем, кто был CX в прошлой MPh.
+        if (p === 'movement') _applyMPhStartCXCleanup();
+
         // Конец RPh: полный cleanup — recovery + transfer state, все кнопки RPh, action-флаги юнитов.
         if (prevPhase === 'rally') {
             // DM-Removal финализация (step h): убираем DM у всех, кроме adjacent-врагу и явно оставленных игроком.
@@ -825,11 +859,12 @@ const handlers = {
 
         // ВАЖНО: rally entry перенесён вниз (после CCPh side-swap) — иначе refresh считает по старым сторонам.
 
-        // Конец MPh: сбросить hasStartedMoving и movementCompleted (оба скоуп-MPh).
+        // Конец MPh: сбросить hasStartedMoving, movementCompleted и wasExhaustedLastTurn (все скоуп-MPh).
         if (prevPhase === 'movement') {
             for (const u of Object.values(State.units)) {
-                if (u.hasStartedMoving)   State.setUnit(u.id, 'hasStartedMoving', false);
-                if (u.movementCompleted)  State.setUnit(u.id, 'movementCompleted', false);
+                if (u.hasStartedMoving)      State.setUnit(u.id, 'hasStartedMoving', false);
+                if (u.movementCompleted)     State.setUnit(u.id, 'movementCompleted', false);
+                if (u.wasExhaustedLastTurn)  State.setUnit(u.id, 'wasExhaustedLastTurn', false);
             }
         }
 
@@ -1096,9 +1131,9 @@ const handlers = {
 // Общий пайплайн огня для всех фаз (MPh DFF, PFPh prep, DFPh Final Fire).
 // Structure: сначала формируем sub-FGs + рисуем LoS-визуал; затем switch по фазе
 // с pre-checks и loop по sub-FG (у каждой фазы свой target getter и пост-обработка).
-// Setup: проверка возможности поставить/перенести юнита в hex.
-// Запрет — пехота противника в гексе ИЛИ переполнение стопки (макс 3 отряда / 4 лидера).
-function _canPlaceAtHex(uid, hex) {
+// Setup: проверка возможности поставить/перенести группу юнитов в hex.
+// Запрет — пехота противника в гексе, выход за setup-зону, или переполнение стопки.
+function _canPlaceAtHex(uids, hex) {
     const hasEnemyInfantry = Object.values(State.units).some(u =>
         u.hex && isSameHex(u.hex, hex) && u.category === 'infantry' && u.side !== State.setupSide
     );
@@ -1106,15 +1141,108 @@ function _canPlaceAtHex(uid, hex) {
         console.log(`[Setup] нельзя — в (${hex.col},${hex.row}) юниты противника`);
         return false;
     }
-    // Если юнит уже на карте и мы его двигаем в тот же hex — он не считается новым (пустой movementGroup).
-    const u = State.units[uid];
-    const sameHex = u.hex && isSameHex(u.hex, hex);
-    const movementGroup = sameHex ? [] : [uid];
-    if (!Rules.checkOverstack(hex, movementGroup, State.units)) {
+    // Setup-зона: каждый из выбранных должен быть легальным в целевом hex по bounds.
+    for (const uid of uids) {
+        const u = State.units[uid];
+        if (!_isHexInSetupZone(u.nation, hex)) {
+            console.log(`[Setup] (${hex.col},${hex.row}) вне зоны расстановки для ${u.id} (${u.nation})`);
+            return false;
+        }
+    }
+    // checkOverstack сам правильно считает: mg-члены едут в target как 1 отряд каждый,
+    // non-mg засчитываются только если уже стоят в target.
+    if (!Rules.checkOverstack(hex, uids, State.units)) {
         console.log(`[Setup] overstack в (${hex.col},${hex.row}) — макс 3 отряда / 4 лидера`);
         return false;
     }
     return true;
+}
+
+// Разрешён ли hex для юнита данной нации по bounds-правилам сцены.
+// bounds формат (в сценарии):
+//   { all: { col:[minCol,maxCol], row:[minRow,maxRow] } }   — одна зона для всей стороны
+//   { byNation: { nation: { col, row } } }                  — разные зоны по нации юнита
+// col и row — опциональные; отсутствие поля = нет ограничения по этой оси.
+function _isHexInSetupZone(nation, hex) {
+    const sideCfg = State.currentScenario.setup.sides[State.setupSide];
+    if (!sideCfg.bounds) return true;
+    let zone;
+    if (sideCfg.bounds.byNation) zone = sideCfg.bounds.byNation[nation];
+    else                         zone = sideCfg.bounds.all;
+    if (!zone) return false;
+    if (zone.col) {
+        const [minCol, maxCol] = zone.col;
+        if (hex.col < minCol || hex.col > maxCol) return false;
+    }
+    if (zone.row) {
+        const [minRow, maxRow] = zone.row;
+        if (hex.row < minRow || hex.row > maxRow) return false;
+    }
+    return true;
+}
+
+// Все hex'ы карты, легальные для юнита данной нации — для подсветки зоны.
+function _hexesInSetupZoneForNation(nation) {
+    const hexes = [];
+    for (let col = 0; col < 2 * COL_COUNT - 1; col++) {
+        for (let row = 1; row <= ROW_COUNT + 1; row++) {
+            if (_isHexInSetupZone(nation, { col, row })) hexes.push({ col, row });
+        }
+    }
+    return hexes;
+}
+
+// Пересчитать подсветку setup-зоны по текущему выделению. Caller гарантирует непустой setupSelectedUnits.
+export function refreshSetupBoundsHighlight() {
+    const unit = State.units[State.setupSelectedUnits[0]];
+    UIState.setSetupBounds(_hexesInSetupZoneForNation(unit.nation));
+}
+
+// Снять выделение setup со всех выбранных юнитов + вернуть их на законные позиции.
+// Юниты во время выделения «липли» к курсору — после снятия выделения надо вернуть
+// пул-юнитов в их места на панели, а карта-юнитов — в их стеки.
+function _clearSetupSelection() {
+    // Собираем hex'ы на карте для пересчёта стеков + флаг «пересобрать панель».
+    const hexesToRestore = new Set();
+    let poolTouched = false;
+    for (const id of State.setupSelectedUnits) {
+        const u = State.units[id];
+        if (u.inSetupPool) poolTouched = true;
+        else if (u.hex) hexesToRestore.add(`${u.hex.col},${u.hex.row}`);
+        State.setUnit(id, 'selectedForSetup', false);   // снять красную рамку
+    }
+
+    // Обнуляем состояние выделения.
+    State.setupSelectedUnits = [];
+    UIState.setSetupBounds([]);   // погасить подсветку setup-зоны
+
+    // Один вызов refreshSetupPanel ставит ВСЕ пул-юниты на их места.
+    if (poolTouched) refreshSetupPanel();
+    // Для каждого затронутого hex на карте — пересчёт стека без tween.
+    for (const key of hexesToRestore) {
+        const [col, row] = key.split(',').map(Number);
+        recalculateHexInstant({ col, row });
+    }
+}
+
+// Все юниты своей стороны в hex'е нужных категорий (для dblclick-групп).
+function _ownUnitsInHex(hex, side, categories) {
+    return Object.values(State.units).filter(u =>
+        u.hex && isSameHex(u.hex, hex) && u.side === side && categories.includes(u.category)
+    );
+}
+
+// Начало MPh (A8.2): CX снимается, но юнит, который был CX, не сможет DT в этой MPh —
+// запоминаем через флаг wasExhaustedLastTurn. Применяется только к стороне-атакующему
+// (это сторона, у которой наступает MPh).
+function _applyMPhStartCXCleanup() {
+    for (const u of Object.values(State.units)) {
+        if (u.side !== 'attacker') continue;
+        if (u.exhausted) {
+            State.setUnit(u.id, 'wasExhaustedLastTurn', true);
+            State.setUnit(u.id, 'exhausted', false);
+        }
+    }
 }
 
 function _isOpenGround(hex) {
@@ -1855,6 +1983,8 @@ async function _handleFire(ctx) {
                 console.log(`[${phase}] sub-FG units=${subFG.map(u=>u.id).join(',')}`);
                 const result = Rules.fireAttack(subFG, targetHex, targets, State.units, State.orchardInSeason);
                 if (result === null) continue;
+                if (result.coloredDie !== undefined) UIState.showDice(result.coloredDie, result.whiteDie);
+                for (const u of subFG) if (u.category === 'carried' && u.mgClass) shakeNode(u.node);
 
                 for (const id of result.weaponsKeepingRoF) weaponsKeepingRoF.add(id);
                 await _apply_changes_for_targets(result.changes);
@@ -1880,6 +2010,8 @@ async function _handleFire(ctx) {
                 console.log(`[${phase}] sub-FG units=${subFG.map(u=>u.id).join(',')}`);
                 const result = Rules.fireAttack(subFG, targetHex, targets, State.units, State.orchardInSeason);
                 if (result === null) continue;
+                if (result.coloredDie !== undefined) UIState.showDice(result.coloredDie, result.whiteDie);
+                for (const u of subFG) if (u.category === 'carried' && u.mgClass) shakeNode(u.node);
 
                 for (const id of result.weaponsKeepingRoF) weaponsKeepingRoF.add(id);
                 await _apply_changes_for_targets(result.changes);
@@ -1905,6 +2037,8 @@ async function _handleFire(ctx) {
                 console.log(`[${phase}] sub-FG units=${subFG.map(u=>u.id).join(',')}`);
                 const result = Rules.fireAttack(subFG, targetHex, targets, State.units, State.orchardInSeason);
                 if (result === null) continue;
+                if (result.coloredDie !== undefined) UIState.showDice(result.coloredDie, result.whiteDie);
+                for (const u of subFG) if (u.category === 'carried' && u.mgClass) shakeNode(u.node);
 
                 for (const id of result.weaponsKeepingRoF) weaponsKeepingRoF.add(id);
                 await _apply_changes_for_targets(result.changes);
@@ -1930,6 +2064,8 @@ async function _handleFire(ctx) {
                 console.log(`[${phase}] sub-FG units=${subFG.map(u=>u.id).join(',')}`);
                 const result = Rules.fireAttack(subFG, targetHex, targets, State.units, State.orchardInSeason);
                 if (result === null) continue;
+                if (result.coloredDie !== undefined) UIState.showDice(result.coloredDie, result.whiteDie);
+                for (const u of subFG) if (u.category === 'carried' && u.mgClass) shakeNode(u.node);
 
                 for (const id of result.weaponsKeepingRoF) weaponsKeepingRoF.add(id);
                 await _apply_changes_for_targets(result.changes);
@@ -1985,7 +2121,8 @@ function _set_firing_Status(phase, firegroupUnits, weaponsKeepingRoF) {
             State.setUnit(u.id, 'firingStatus', 'FinalFire');
         });
     } else if (phase === 'prepFire') {
-        // PFPh: prepFired + снять CX
+        // PFPh (ASL 3.2.5): после резолва атаки — пометить юнит prepFired + снять CX counter.
+        // Правило: "remove CX counter [if any] from firing unit".
         firegroupUnits.forEach(u => {
             State.setUnit(u.id, 'prepFired', true);
             if (u.category !== 'carried') State.setUnit(u.id, 'exhausted', false);
@@ -2149,7 +2286,14 @@ function _replace_unit(oldId, newTemplateId, newId) {
         _remove_unit(oldId);   // временно сбросит possessorId у weapons — восстановим ниже
         const newUnit = await spawn_unit(newTemplateId, newId, hex, layer, side);
         for (const [key, val] of Object.entries(inherit)) {
+            // 'broken' применяем напрямую, без setUnit — иначе flipRendering стартует
+            // конкурирующий tween со stale x0 и утаскивает юнит в центр гекса.
+            if (key === 'broken') continue;
             State.setUnit(newId, key, val);
+        }
+        if (inherit.broken) {
+            newUnit.broken = true;
+            if (newUnit.brokenImage) newUnit.node.findOne('Image').image(newUnit.brokenImage);
         }
         // Восстанавливаем possessorship weapons на новом юните
         for (const wid of inheritedWeapons) {
@@ -2469,6 +2613,8 @@ function _addToFireGroup(unitId) {
 
 
 export const Engine = {
+
+  handlers,   // прямой доступ к обработчикам (используется в interpretDblClickEvent)
 
   // Получаем команду от Interpreter и выполняем нужный handler
   execute(command) {  // command → { name: 'MOVE_TO' ctx: { unitId: ..., pos: ... } }

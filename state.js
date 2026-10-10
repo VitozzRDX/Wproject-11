@@ -1,3 +1,5 @@
+import { UNIT_IMAGE_SIZE } from './unitloading.js';
+
 export const State = {
     selected: null,
     units: {},
@@ -44,7 +46,7 @@ export const State = {
     currentScenario: null,             // ссылка на объект загруженного сценария (для setup и т.п.)
     setupSide: null,                   // 'attacker' | 'defender' | null — чья очередь расставлять
     idsInSetupPool: [],                // id юнитов, которые сейчас в setup-панели (ещё не на карте)
-    setupSelectedUnit: null,           // id единственного выбранного юнита (в панели или на карте)
+    setupSelectedUnits: [],            // id'шки выбранных юнитов setup (0..3; 1 — обычный выбор, 3 — dblclick-набор)
     setupDiceRolled: false,            // true если dice-roll уже выполнен для текущей стороны
     uiLayer: null,                     // ссылка на uiLayer — нужна setupPhase для перемещения нод между слоями
 
@@ -59,9 +61,10 @@ export const State = {
         const oldValue = this.units[id]?.[key];
 
         if (key === 'pos') {
-            const unit = this.units[id];
-            this.units[id].x = value.x - unit.image.width  / 2;
-            this.units[id].y = value.y - unit.image.height / 2;
+            // Центрирование по единой константе UNIT_IMAGE_SIZE (отрисованный размер юнита),
+            // а не unit.image.width (native размер гифки).
+            this.units[id].x = value.x - UNIT_IMAGE_SIZE / 2;
+            this.units[id].y = value.y - UNIT_IMAGE_SIZE / 2;
         } else {
             this.units[id][key] = value;
         }
