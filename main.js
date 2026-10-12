@@ -139,6 +139,23 @@ function _raiseHoveredUnit(unitId) {
     u.node.getLayer()?.batchDraw();
 }
 
+// Посчитать hex'ы нужного террейна по сторонам и вывести «Hill: Ax N / Al M».
+// Вызывается при загрузке сценария — задержка та же, что для VP: пул-юниты
+// setup спавнятся async после этого места и легли бы поверх текста.
+function _initHillCounter(scen) {
+    const terrains = scen.winConditions?.autoAtTurn4?.terrain;
+    if (!terrains) return;
+    let ax = 0, al = 0;
+    for (const [key, side] of Object.entries(State.hexControl)) {
+        const [col, row] = key.split('-').map(Number);
+        const hexT = terrainAt(col, row);
+        if (!terrains.some(t => hexT.includes(t))) continue;
+        if (side === 'axis') ax++;
+        else if (side === 'allied') al++;
+    }
+    setTimeout(() => UIState.setHillControlText(`Hill: Ax ${ax} / Al ${al}`), 100);
+}
+
 export function refreshSideBadge() {
     const attackerUnit = Object.values(State.units).find(u => u.side === 'attacker' && u.category === 'infantry');
     const isAxis = AXIS_NATIONS.has(attackerUnit?.nation);
@@ -210,6 +227,15 @@ async function loadScenario(name) {
     unitLayer = new Konva.Layer();
     State.unitLayer = unitLayer;   // save/load использует этот слой для spawn_unit
     State.uiLayer   = uiLayer;     // setupPhase использует для перекладывания нод юнитов пул↔карта
+
+    // Контроль гексов (A26): берём пред-посчитанный словарь из сценария.
+    State.hexControl = scen.hexControl ? { ...scen.hexControl } : {};
+    _initHillCounter(scen);
+    // Стартовый VP-счётчик (порог ещё не определён — ждём бросок куба).
+    // Задержка — пул-юниты setup спавнятся async после этого места и легли бы поверх текста.
+    if (scen.winConditions?.atGameEnd?.type === 'vp') {
+        setTimeout(() => UIState.setAlliedVPText(`VP: 0 / -`), 100);
+    }
     await unitloading.createAndLoadUnits(unitLayer, scen.units);
     stage.add(unitLayer);
     worldFxLayer.moveToTop();   // эффекты (LoS, residual, smoke) над юнитами
@@ -228,13 +254,14 @@ async function loadScenario(name) {
     // NextPhase в фазе setup не показываем — добавляется в EndSetupSide после последней стороны.
     if (!scen.setup) {
         UIState.addButton('NextPhase', { x: 10, y: 10, label: 'NextPhase' });
+        if (scen.gameLength) UIState.setTurnText(`TURN 1 / ${Math.ceil(scen.gameLength / 2)}`);
     }
     UIState.addButton('Save',      { x: 160, y: 10, label: 'Save' });
     UIState.addButton('Load',      { x: 310, y: 10, label: 'Load' });
     if (!hasSave()) UIState.fadeButton('Load');   // нет сейва — кнопка неактивна
     UIState.addImage('turnphase', {
         src: './graf/turnphase.gif',
-        x: window.innerWidth - 170, y: 15,
+        x: window.innerWidth - 170, y: 20,
         opacity: 1,
         scale: 0.8,
         overlayPolygon: { sides: 8, radius: 53, rotation: 22.5, stroke: 'white', strokeWidth: 2 },
@@ -243,12 +270,12 @@ async function loadScenario(name) {
     // Сдвиг +30/+30 — ручная подгонка центра относительно turnphase (разные размеры картинок).
     UIState.addImage('sideAllied', {
         src: './graf/turnphaseallied.gif',
-        x: window.innerWidth - 170 + 35, y: 15 + 35,
+        x: window.innerWidth - 135, y: 55,
         opacity: 0.5, scale: 0.8,
     });
     UIState.addImage('sideAxis', {
         src: './graf/turnphaseaxis.gif',
-        x: window.innerWidth - 170 + 24, y: 15 + 24,
+        x: window.innerWidth - 146, y: 44,
         opacity: 0.5, scale: 0.8,
     });
     // addImage асинхронно грузит картинки (await loadImage). Ждём чтобы ноды успели создаться,

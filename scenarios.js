@@ -178,6 +178,27 @@ export const scenarios = {
       },
     },
     orchardInSeason: true,   // 28 августа — orchard в сезоне (апрель-октябрь)
+    gameLength: 14,          // 7 full turns = 14 player turns
+    winConditions: {
+        side: 'allied',
+        // Первое: автопобеда в конце TURN 4 за контроль hill/crest.
+        autoAtTurn4: { type: 'hexControl', terrain: ['hill', 'crestLine'], minCount: 30 },
+        // Второе: любое время — набрать VP-порог (устанавливается по стартовому броску).
+        atGameEnd:   { type: 'vp', targets: { '1': 15, '2': 16, '3': 18, '4': 19, '5': 21, '6': 22 } },
+    },
+    hexControl: {
+        "33-6": "axis",  "33-7": "axis",  "33-10": "axis",
+        "34-6": "axis",  "34-7": "axis",  "34-8": "axis",  "34-10": "axis",
+        "35-2": "axis",  "35-3": "axis",  "35-4": "axis",  "35-5": "axis",
+        "35-6": "axis",  "35-7": "axis",  "35-8": "axis",  "35-9": "axis",  "35-10": "axis",
+        "36-2": "axis",  "36-3": "axis",  "36-4": "axis",  "36-5": "axis",
+        "36-6": "axis",  "36-7": "axis",  "36-8": "axis",  "36-9": "axis",  "36-10": "axis",
+        "37-2": "axis",  "37-3": "axis",  "37-4": "axis",  "37-5": "axis",
+        "37-6": "axis",  "37-7": "axis",  "37-8": "axis",  "37-9": "axis",
+        "38-3": "axis",  "38-4": "axis",  "38-6": "axis",  "38-7": "axis",
+        "38-8": "axis",  "38-9": "axis",
+        "39-3": "axis",
+    },
     activeRole: 'attacker',
     initialCamera: { x: 750, y: 0 },
     roadsUrl: './roadPixels.json',
@@ -190,6 +211,7 @@ export const scenarios = {
     cardVisuals: A_CARDVISUALS,
     units:       A_UNITS,
     orchardInSeason: true,   // 28 августа — orchard в сезоне
+    gameLength: 14,          // 7 full turns = 14 player turns
     activeRole: 'attacker',
     initialCamera: { x: 750, y: 0 },
     roadsUrl: './roadPixels.json',

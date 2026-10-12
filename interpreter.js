@@ -2,6 +2,7 @@ import { Engine } from './engine.js'
 import { State } from './state.js'
 import { PhaseManager } from './phase_manager.js'
 import { pixelToHex, isSameHex } from './hexUtils.js'
+import { UIState } from './uiState.js'
 
 
 function createContext(e) {
@@ -92,11 +93,13 @@ const RULES = [
     },
     // Setup: клик по гексу при выбранном юните — поставить (из пула) или перенести (с карты).
     // Выше SetupToggleSelect, чтобы при выбранном юните клик по чужому гексу не переключал выделение.
+    // notSelected: клик по самой sticky-ноде (2-й клик dblclick'а) не должен ставить юнит.
     {
         requiresAny: [{
             phaseIsSetup: ()=>PhaseManager.getPhase()==='setup',
             leftClick:    c=>c.button!==2,
             notPanel:     c=>!c.clickedSetupPanel,
+            notSelected:  c=>!State.setupSelectedUnits.includes(c.unitId),
             hasSelected:  ()=>State.setupSelectedUnits.length > 0,
         }],
         name: 'SetupPlaceOrMoveOnHex'
@@ -668,6 +671,7 @@ export function interpretEvent(e) {
         return;
     }
 
+    UIState.clearLOS();   // любое сработавшее правило — результативный клик, старые LoS не нужны
     Engine.execute({ name: rule.name, ctx:ctx }); // → { name: 'SELECT_UNIT', unitId: ..., pos: ... }
 }
 

@@ -8,6 +8,7 @@ import { RendererUI } from './rendererUI.js';
 import { PhaseManager } from './phase_manager.js';
 import { spawn_unit } from './unitloading.js';
 import { recalculateHexInstant } from './positioning.js';
+import { terrainAt } from './cards.js';
 import { scenarios } from './scenarios.js';
 import { refreshSetupPanel, refreshEndSetupSideButton } from './setupPhase.js';
 import { refreshSideBadge } from './main.js';
@@ -32,6 +33,7 @@ const STATE_FIELDS = [
     'movementGroup', 'fireGroup', 'fireGroupHexesArray', 'fired_from_on_target_in_hex',
     // setup-фаза
     'setupSide', 'idsInSetupPool', 'setupSelectedUnits', 'setupDiceRolled',
+    'playerTurn', 'hexControl', 'alliedVP', 'alliedVpTarget',
 ];
 
 // Поля юнита, которые НЕ сохраняем — Konva-ноды и Map/Set, не JSON-сериализуются.
@@ -117,11 +119,44 @@ export async function load() {
     _restoreUI(snapshot);
     // addImage асинхронный — rotateImage до создания ноды был бы no-op. Отложим на tick.
     setTimeout(() => _restoreTurnphaseRotation(snapshot.phase), 50);
+    _restoreTurnText();
+    _restoreHillCounter();
+    _restoreVPCounter();
     _restoreSetupPanelIfNeeded(snapshot);
     _restoreSetupBoundsHighlightIfNeeded(snapshot);
     _restoreSmokeVisuals();
 
     console.log('[load] snapshot loaded');
+}
+
+// Текст "Turn N / M" — после load пересоздаём из восстановленных playerTurn + scen.gameLength.
+function _restoreTurnText() {
+    if (!State.currentScenario?.gameLength) return;
+    const fullTurn = Math.ceil(State.playerTurn / 2);
+    const totalFullTurns = Math.ceil(State.currentScenario.gameLength / 2);
+    setTimeout(() => UIState.setTurnText(`TURN ${fullTurn} / ${totalFullTurns}`), 50);
+}
+
+// Пере-показать VP-счётчик Allied после load (значения уже восстановлены из STATE_FIELDS).
+function _restoreVPCounter() {
+    if (State.currentScenario?.winConditions?.atGameEnd?.type !== 'vp') return;
+    const target = State.alliedVpTarget == null ? '-' : State.alliedVpTarget;
+    setTimeout(() => UIState.setAlliedVPText(`VP: ${State.alliedVP ?? 0} / ${target}`), 50);
+}
+
+// Пере-посчитать и показать счётчик контроля hill-гексов после load.
+function _restoreHillCounter() {
+    const terrains = State.currentScenario?.winConditions?.autoAtTurn4?.terrain;
+    if (!terrains) return;
+    let ax = 0, al = 0;
+    for (const [key, side] of Object.entries(State.hexControl ?? {})) {
+        const [col, row] = key.split('-').map(Number);
+        const hexT = terrainAt(col, row);
+        if (!terrains.some(t => hexT.includes(t))) continue;
+        if (side === 'axis') ax++;
+        else if (side === 'allied') al++;
+    }
+    setTimeout(() => UIState.setHillControlText(`Hill: Ax ${ax} / Al ${al}`), 50);
 }
 
 // Пере-отрисовать дым из State.dynamicTerrain. State поле восстановлено, но clearAll уничтожил

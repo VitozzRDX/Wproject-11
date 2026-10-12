@@ -4,7 +4,7 @@ import { PhaseManager } from './phase_manager.js';
 import { pixelToHex, hexToPixel, hexLabel, hexDistance, isSameHex, isAdjacent, calcNearestHexes, bfsHexes, dijkstraHexes, reconstructPath, COL_COUNT, ROW_COUNT } from './hexUtils.js';
 import { terrainAt } from './cards.js';
 import { UIState } from './uiState.js';
-import { spawn_unit } from './unitloading.js';
+import { spawn_unit, TEMPLATES } from './unitloading.js';
 import { getLastHit } from './terrainLOS.js';
 import { flipReplaceUnit, raiseToTop, shakeNode } from './renderer.js';
 import { recalculateHex, recalculateHexInstant } from './positioning.js';
@@ -143,6 +143,7 @@ const handlers = {
             State.idsInSetupPool = [];
             UIState.hideSetupPanel();
             UIState.addButton('NextPhase', { x: 10, y: 10, label: 'NextPhase' });
+            UIState.setTurnText(`TURN 1 / ${Math.ceil(State.currentScenario.gameLength / 2)}`);
             PhaseManager.setPhase('rally');
             console.log('[Setup] done → rally');
         }
@@ -785,6 +786,7 @@ const handlers = {
         State.advanceSelected = null;
         console.log(`[APh] ${uid} advanced to (${targetHex.col},${targetHex.row})`);
         _markCCHexIfEnemyPresent(unit, targetHex);
+        _updateHexControl(targetHex);
     },
 
     NextPhase: () => {
@@ -954,6 +956,15 @@ const handlers = {
             const AXIS = new Set(['german', 'italian', 'japanese']);
             const attackerUnit = Object.values(State.units).find(u => u.side === 'attacker' && u.category === 'infantry');
             UIState.changeBadge(AXIS.has(attackerUnit?.nation));
+            // 3.9 Turn Record: +1 player-turn, обновить UI, проверить END.
+            State.playerTurn++;
+            const fullTurn = Math.ceil(State.playerTurn / 2);
+            const totalFullTurns = Math.ceil(State.currentScenario.gameLength / 2);
+            UIState.setTurnText(`TURN ${fullTurn} / ${totalFullTurns}`);
+            _checkWinConditions();
+            if (State.playerTurn > State.currentScenario.gameLength) {
+                console.log('[Scenario] game over');
+            }
         }
 
         // Вход в RPh: старт Recovery-подфазы у attacker'а. Подсветить eligible weapons на карте.
@@ -1222,6 +1233,88 @@ function _clearSetupSelection() {
     for (const key of hexesToRestore) {
         const [col, row] = key.split(',').map(Number);
         recalculateHexInstant({ col, row });
+    }
+}
+
+const AXIS_NATIONS = new Set(['german', 'italian', 'japanese']);
+
+// VP, которые даёт Allied игроку уничтоженный Axis-юнит.
+function _calcUnitVP(u) {
+    if (!AXIS_NATIONS.has(u.nation)) return 0;
+    if (u.type === 'squad') {
+        return u.size === 'halfSquad' ? 1 : 2;   // squad=2, halfSquad=1
+    }
+    if (u.type === 'leader') {
+        const lm = u.leadershipModifier;
+        if (lm <= -1) return 2;                   // -1 и ниже = 2 VP
+        if (lm === 0 || lm === 1) return 1;       // +0, +1 = 1 VP
+    }
+    return 0;
+}
+
+// Начислить VP + обновить UI + лог победы при достижении порога.
+function _grantAlliedVP(amount) {
+    if (!amount) return;
+    State.alliedVP = (State.alliedVP ?? 0) + amount;
+    UIState.setAlliedVPText(`VP: ${State.alliedVP} / ${State.alliedVpTarget ?? '-'}`);
+    if (State.alliedVpTarget && State.alliedVP >= State.alliedVpTarget) {
+        console.log(`[Scenario] allied WIN by VP (${State.alliedVP} / ${State.alliedVpTarget})`);
+    }
+}
+
+// A26 Control: Good Order Infantry MMC в hex'е без enemy → её faction получает контроль.
+// Контроль не теряется при уходе — только перехватывается другой стороной тем же путём.
+function _updateHexControl(hex) {
+    if (!hex) return;
+    const inHex = Object.values(State.units).filter(u =>
+        u.hex && isSameHex(u.hex, hex) && u.category === 'infantry'
+    );
+    const factionOf = (u) => AXIS_NATIONS.has(u.nation) ? 'axis' : 'allied';
+    const factions = new Set(inHex.map(factionOf));
+    if (factions.size > 1) return;   // смешанный hex — контроль не меняется
+    const firstGoodOrderSquad = inHex.find(u =>
+        u.type === 'squad' && !u.broken && !u.pinned && !u.wounded
+    );
+    if (!firstGoodOrderSquad) return;
+    if (!State.hexControl) State.hexControl = {};   // старые сейвы могут не иметь поля — восстанавливаем
+    State.hexControl[`${hex.col}-${hex.row}`] = factionOf(firstGoodOrderSquad);
+    _refreshHexControlCounter();
+}
+
+// Пересчёт UI-счётчика контроля (hex'ы нужного террейна по сторонам).
+function _refreshHexControlCounter() {
+    const terrains = State.currentScenario?.winConditions?.autoAtTurn4?.terrain;
+    if (!terrains) return;
+    let ax = 0, al = 0;
+    for (const [key, side] of Object.entries(State.hexControl ?? {})) {
+        const [col, row] = key.split('-').map(Number);
+        const hexT = terrainAt(col, row);
+        if (!terrains.some(t => hexT.includes(t))) continue;
+        if (side === 'axis') ax++;
+        else if (side === 'allied') al++;
+    }
+    UIState.setHillControlText(`Hill: Ax ${ax} / Al ${al}`);
+}
+
+// Проверка автопобеды Allied в конце TURN 4 за контроль hill/crest.
+function _checkWinConditions() {
+    const wc = State.currentScenario?.winConditions;
+    if (!wc?.autoAtTurn4) return;
+    // playerTurn уже увеличен; закончившийся full turn = ceil((playerTurn-1)/2).
+    const fullTurnJustEnded = Math.ceil((State.playerTurn - 1) / 2);
+    if (fullTurnJustEnded < 4) return;
+    const check = wc.autoAtTurn4;
+    if (check.type !== 'hexControl') return;
+    const terrains = check.terrain;
+    let count = 0;
+    for (const [key, side] of Object.entries(State.hexControl ?? {})) {
+        if (side !== wc.side) continue;
+        const [col, row] = key.split('-').map(Number);
+        const hexT = terrainAt(col, row);
+        if (terrains.some(t => hexT.includes(t))) count++;
+    }
+    if (count >= check.minCount) {
+        console.log(`[Scenario] ${wc.side} WIN — control ${count}/${check.minCount} target hexes`);
     }
 }
 
@@ -1904,6 +1997,8 @@ function _adjacentUnbrokenEnemy(unit) {
 
 // Показывает KIA-визуал на юните, ждёт немного, затем удаляет.
 async function _eliminateWithKIA(id) {
+    const u = State.units[id];
+    if (u) _grantAlliedVP(_calcUnitVP(u));   // VP за уничтожение Axis
     State.setUnit(id, 'kia', true);
     await sleep(700);
     _remove_unit(id);
@@ -2250,6 +2345,14 @@ function _replace_unit(oldId, newTemplateId, newId) {
     const old = State.units[oldId];
     if (!old) return;
 
+    // VP: CR squad → halfSquad даёт 1 VP (как за уничтожение halfSquad по правилу).
+    const newTpl = TEMPLATES[newTemplateId];
+    if (AXIS_NATIONS.has(old.nation)
+        && old.type === 'squad' && old.size !== 'halfSquad'
+        && newTpl && newTpl.size === 'halfSquad') {
+        _grantAlliedVP(1);
+    }
+
     const inherit = {
         broken:                 old.broken,
         desperationMorale:      old.desperationMorale,
@@ -2454,6 +2557,7 @@ async function _apply_movement_result_in_State_for_all_MG(result, targetHex, ove
             }
         });
     });
+    _updateHexControl(targetHex);   // A26: Good Order MMC в hex'е без enemy → контроль нашей стороне
 
     // Residual FP (правило 3.3.5): если в хексе есть residual counter,
     // все только что вошедшие юниты атакуются одной IFT DR (leader first через _processMC)

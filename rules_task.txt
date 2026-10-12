@@ -281,3 +281,16 @@ CCT (Kill Number by odds ratio):
 Orchard season (A6.2):
 Orchards are in season during the months of April through October. An in-season
 orchard is an obstacle to any LOS drawn between units at different elevations.
+
+
+Turn Record Chart (3.9):
+A full turn is recorded when both players have run through the entire sequence
+as the ATTACKER. The previous DEFENDER now becomes the ATTACKER and inverts
+the turn counter and, if he was already the ATTACKER this game turn, advances
+the turn counter one box on the Turn Record Chart. When the turn counter is
+placed on the END box the scenario is over.
+
+
+Control (A26):
+A Good Order Infantry MMC gains control of the hex or building it occupies
+without the presence of an enemy unit.

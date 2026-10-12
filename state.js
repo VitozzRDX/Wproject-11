@@ -47,6 +47,10 @@ export const State = {
     setupSide: null,                   // 'attacker' | 'defender' | null — чья очередь расставлять
     idsInSetupPool: [],                // id юнитов, которые сейчас в setup-панели (ещё не на карте)
     setupSelectedUnits: [],            // id'шки выбранных юнитов setup (0..3; 1 — обычный выбор, 3 — dblclick-набор)
+    playerTurn: 1,                     // 1..gameLength; +1 на каждый side-swap (3.9 Turn Record)
+    hexControl: {},                    // {"col-row": "axis"|"allied"} — какая сторона контролирует hex (A26)
+    alliedVP: 0,                       // накопленные Allied VP (убитые Axis)
+    alliedVpTarget: null,              // VP-порог; выставляется при setup-dice-roll
     setupDiceRolled: false,            // true если dice-roll уже выполнен для текущей стороны
     uiLayer: null,                     // ссылка на uiLayer — нужна setupPhase для перемещения нод между слоями
 

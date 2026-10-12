@@ -69,6 +69,9 @@ export const RendererUI = {
         // Удалить CC-панель если была.
         RendererUI.removeCCPanel();
         RendererUI.removeDice();
+        uiLayer?.findOne('.turnText')?.destroy();
+        uiLayer?.findOne('.hillCounter')?.destroy();
+        uiLayer?.findOne('.vpCounter')?.destroy();
         uiLayer?.batchDraw();
     },
 
@@ -94,7 +97,11 @@ export const RendererUI = {
             if (action === 'setSetupBounds') RendererUI.drawSetupBounds(data.hexes);
             if (action === 'showDice')       RendererUI.drawDice(data.colored, data.white);
             if (action === 'hideDice')       RendererUI.removeDice();
+            if (action === 'setTurnText')    RendererUI.drawTurnText(data.text);
+            if (action === 'setHillControlText') RendererUI.drawHillControlText(data.text);
+            if (action === 'setAlliedVPText')    RendererUI.drawAlliedVPText(data.text);
             if (action === 'flashLOS')       RendererUI.drawLOSLine(data.from, data.to, data.color);
+            if (action === 'clearLOS')       RendererUI.clearLOS();
             if (action === 'flashHitPoints') RendererUI.drawHitPoints(data);
             if (action === 'setResidualFP')  RendererUI.drawResidualCounter(data.hex, data.fp);
             if (action === 'setSmoke')       RendererUI.drawSmoke(data.hex);
@@ -112,6 +119,12 @@ export const RendererUI = {
 
         // первичная отрисовка уже добавленных кнопок
         Object.values(UIState.buttons).forEach(def => RendererUI.drawButton(def));
+    },
+
+    clearLOS() {
+        losLines.forEach(l => l.destroy());
+        losLines.length = 0;
+        worldFxLayer?.batchDraw();
     },
 
     drawLOSLine(from, to, color = 'red') {
@@ -445,9 +458,9 @@ export const RendererUI = {
         const w = PAD * 2 + DIE * 2 + GAP;
         const h = PAD * 2 + DIE;
         const stage = uiLayer.getStage();
-        // Центруем под крутилкой (её центр ≈ stage.width() - 170 + 48).
-        const x = stage.width() - 170 + 48 - w / 2;
-        const y = 130;
+        // Центруем под крутилкой (её центр ≈ stage.width() - 122).
+        const x = stage.width() - 122 - w / 2 + 10;
+        const y = 135;
         const group = new Konva.Group({ x, y, name: 'diceDisplay' });
         group.add(new Konva.Rect({ x: 0, y: 0, width: w, height: h, fill: 'rgba(0,0,0,0.7)', cornerRadius: 4 }));
         group.add(_makeDie(PAD,              PAD, DIE, 'red',   colored, 'white'));
@@ -460,6 +473,55 @@ export const RendererUI = {
     removeDice() {
         const d = uiLayer?.findOne('.diceDisplay');
         if (d) { d.destroy(); uiLayer.batchDraw(); }
+    },
+
+    // Счётчик Allied VP под hill-counter.
+    drawAlliedVPText(text) {
+        uiLayer?.findOne('.vpCounter')?.destroy();
+        const stage = uiLayer.getStage();
+        const t = new Konva.Text({
+            x: stage.width() - 162 + 10, y: 205,
+            width: 100,
+            text, fill: 'white', fontSize: 12, fontStyle: 'bold',
+            align: 'center',
+            name: 'vpCounter',
+            listening: false,
+        });
+        uiLayer.add(t);
+        uiLayer.batchDraw();
+    },
+
+    // Счётчик контроля hill-гексов под кубиками.
+    drawHillControlText(text) {
+        uiLayer?.findOne('.hillCounter')?.destroy();
+        const stage = uiLayer.getStage();
+        const t = new Konva.Text({
+            x: stage.width() - 162 + 10, y: 185,
+            width: 100,
+            text, fill: 'white', fontSize: 12, fontStyle: 'bold',
+            align: 'center',
+            name: 'hillCounter',
+            listening: false,
+        });
+        uiLayer.add(t);
+        uiLayer.batchDraw();
+    },
+
+    // Текст номера turn'а под крутилкой (центровка под её центром).
+    drawTurnText(text) {
+        uiLayer?.findOne('.turnText')?.destroy();
+        const stage = uiLayer.getStage();
+        const t = new Konva.Text({
+            x: stage.width() - 162 + 10,   // ширина 80, центр над крутилкой +10
+            y: 2,                           // над крутилкой (верх крутилки y=20)
+            width: 80,
+            text, fill: 'white', fontSize: 14, fontStyle: 'bold',
+            align: 'center',
+            name: 'turnText',
+            listening: false,
+        });
+        uiLayer.add(t);
+        uiLayer.batchDraw();
     },
 
     // Подсветка легальной setup-зоны (зелёные hex'ы на worldFxLayer).

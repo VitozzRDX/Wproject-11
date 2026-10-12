@@ -70,12 +70,32 @@ export const UIState = {
         this.subscribers.forEach(sub => sub('hideDice', null, {}));
     },
 
+    // Текст номера turn'а под крутилкой: "Turn 2 / 7".
+    setTurnText(text) {
+        this.subscribers.forEach(sub => sub('setTurnText', null, { text }));
+    },
+
+    // Текст счётчика контроля hill-гексов под кубиками: "Hill: Ax 30 / Al 15".
+    setHillControlText(text) {
+        this.subscribers.forEach(sub => sub('setHillControlText', null, { text }));
+    },
+
+    // Счётчик VP Allied под Hill-counter: "VP: 7 / 18".
+    setAlliedVPText(text) {
+        this.subscribers.forEach(sub => sub('setAlliedVPText', null, { text }));
+    },
+
     subscribe(handler) {
         this.subscribers.push(handler);
     },
 
     flashLOS(from, to, color) {
         this.subscribers.forEach(sub => sub('flashLOS', null, { from, to, color }));
+    },
+
+    // Снять все LoS-линии (вызывается перед обработкой результативного клика).
+    clearLOS() {
+        this.subscribers.forEach(sub => sub('clearLOS', null, {}));
     },
 
     flashHitPoints(points) {
