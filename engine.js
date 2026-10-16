@@ -4,7 +4,7 @@ import { PhaseManager } from './phase_manager.js';
 import { pixelToHex, hexToPixel, hexLabel, hexDistance, isSameHex, isAdjacent, calcNearestHexes, bfsHexes, dijkstraHexes, reconstructPath, COL_COUNT, ROW_COUNT } from './hexUtils.js';
 import { terrainAt } from './cards.js';
 import { UIState } from './uiState.js';
-import { spawn_unit, TEMPLATES } from './unitloading.js';
+import { spawn_unit, TEMPLATES, UNIT_IMAGE_SIZE } from './unitloading.js';
 import { getLastHit } from './terrainLOS.js';
 import { flipReplaceUnit, raiseToTop, shakeNode } from './renderer.js';
 import { recalculateHex, recalculateHexInstant } from './positioning.js';
@@ -185,6 +185,7 @@ const handlers = {
             }
             State.fireGroup = [];
             State.fireGroupHexesArray = [];
+            _refreshGroupPanel();   // FG очищена — панель покажет MG (если есть) или скроется
             return;
         }
         if (State.movementGroup.length > 0) {
@@ -214,7 +215,7 @@ const handlers = {
             UIState.removeButton('PlaceSmoke');
             UIState.removeButton('Drop');
             UIState.removeButton('Recover');
-
+            _refreshGroupPanel();   // MG очищена — панель скроется (или покажет FG, если успела появиться)
             return;
         }
         // APh: сбросить выбранного для advance.
@@ -349,14 +350,14 @@ const handlers = {
         const adjacentEnemy = _adjacentUnbrokenEnemy(unit);
         if (adjacentEnemy) {
             console.log(`[RtPh] ${unit.id} eliminated: ends adjacent to unbroken ${adjacentEnemy.id}`);
-            await _eliminateWithKIA(unit.id);
+            await _killUnit(unit.id, { cause: 'rout', hex: unit.hex });
             _finalizeRoutState();
             return;
         }
         // Eliminate: обязан был раутиться, но не двинулся ни разу.
         if (unit.mustRout) {
             console.log(`[RtPh] ${unit.id} eliminated: failed to rout (never moved)`);
-            await _eliminateWithKIA(unit.id);
+            await _killUnit(unit.id, { cause: 'rout', hex: unit.hex });
             _finalizeRoutState();
             return;
         }
@@ -529,7 +530,7 @@ const handlers = {
                 console.log(`[Repair] ${possessor.id} repaired ${weapon.id} (dr=${dr})`);
             } else if (result === 'eliminated') {
                 console.log(`[Repair] ${weapon.id} permanently eliminated (dr=6)`);
-                await _eliminateWithKIA(weapon.id);
+                await _killUnit(weapon.id, { cause: 'repair', hex: weapon.hex });
             } else {
                 console.log(`[Repair] ${possessor.id} failed to repair ${weapon.id} (dr=${dr})`);
             }
@@ -680,7 +681,7 @@ const handlers = {
         } else if (originalTwelve) {
             console.log(`[UnitRally] ${u.id} original 12 → CR`);
             if (u.halfSquad) _replace_unit(u.id, u.halfSquad, u.id);
-            else             await _eliminateWithKIA(u.id);
+            else             await _killUnit(u.id, { cause: 'rally-cr', hex: u.hex });
         }
         _clearUnitRallyState();
         _refreshUnitRallyHighlights();
@@ -700,7 +701,7 @@ const handlers = {
             // Casualty Reduction: squad → HS, HS/leader → eliminated.
             console.log(`[SelfRally] ${u.id} original 12 → CR`);
             if (u.halfSquad) _replace_unit(u.id, u.halfSquad, u.id);
-            else             await _eliminateWithKIA(u.id);
+            else             await _killUnit(u.id, { cause: 'rally-cr', hex: u.hex });
         }
         _clearSelfRallyState();
         _refreshSelfRallyHighlights();
@@ -787,6 +788,7 @@ const handlers = {
         console.log(`[APh] ${uid} advanced to (${targetHex.col},${targetHex.row})`);
         _markCCHexIfEnemyPresent(unit, targetHex);
         _updateHexControl(targetHex);
+        _eliminateIfOutOfBounds(uid);
     },
 
     NextPhase: () => {
@@ -1238,28 +1240,66 @@ function _clearSetupSelection() {
 
 const AXIS_NATIONS = new Set(['german', 'italian', 'japanese']);
 
-// VP, которые даёт Allied игроку уничтоженный Axis-юнит.
+// Какая сторона у юнита (определяется нацией).
+function _unitSide(u) {
+    return AXIS_NATIONS.has(u.nation) ? 'axis' : 'allied';
+}
+
+// Чистая проверка: hex за границами игровой зоны сценария.
+function _isOutOfBounds(hex) {
+    const area = State.currentScenario && State.currentScenario.playArea;
+    if (!area) return false;
+    return hex.col < area.col[0] || hex.col > area.col[1]
+        || hex.row < area.row[0] || hex.row > area.row[1];
+}
+
+// Ценность юнита в VP. Без привязки к стороне — просто «сколько стоит».
 function _calcUnitVP(u) {
-    if (!AXIS_NATIONS.has(u.nation)) return 0;
-    if (u.type === 'squad') {
-        return u.size === 'halfSquad' ? 1 : 2;   // squad=2, halfSquad=1
-    }
+    if (u.type === 'squad')  return u.size === 'halfSquad' ? 1 : 2;
     if (u.type === 'leader') {
         const lm = u.leadershipModifier;
-        if (lm <= -1) return 2;                   // -1 и ниже = 2 VP
-        if (lm === 0 || lm === 1) return 1;       // +0, +1 = 1 VP
+        if (lm <= -1)              return 2;
+        if (lm === 0 || lm === 1)  return 1;
     }
     return 0;
 }
 
-// Начислить VP + обновить UI + лог победы при достижении порога.
-function _grantAlliedVP(amount) {
+// Начислить очки стороне. В State пишем всегда.
+// UI обновляем только если у этой стороны задана цель — её ставит сценарий.
+function _grantVP(side, amount) {
     if (!amount) return;
-    State.alliedVP = (State.alliedVP ?? 0) + amount;
-    UIState.setAlliedVPText(`VP: ${State.alliedVP} / ${State.alliedVpTarget ?? '-'}`);
-    if (State.alliedVpTarget && State.alliedVP >= State.alliedVpTarget) {
-        console.log(`[Scenario] allied WIN by VP (${State.alliedVP} / ${State.alliedVpTarget})`);
+    if (side === 'allied') {
+        State.alliedVP = State.alliedVP + amount;
+        if (State.alliedVpTarget === null) return;
+        UIState.setAlliedVPText(`VP: ${State.alliedVP} / ${State.alliedVpTarget}`);
+    } else {
+        State.axisVP = State.axisVP + amount;
+        if (State.axisVpTarget === null) return;
+        UIState.setAxisVPText(`VP: ${State.axisVP} / ${State.axisVpTarget}`);
     }
+}
+
+// Правило VP при эллиминации. Сначала спрашиваем сценарий.
+// Если сценарий не задал своё правило — работает дефолт: другая сторона получает ценность убитого.
+function _vpOnElimination(unit, context) {
+    const scen = State.currentScenario;
+    const fullTurn = Math.ceil(State.playerTurn / 2);
+    if (scen && typeof scen.vpOnElimination === 'function') {
+        return scen.vpOnElimination(unit, context, fullTurn, _calcUnitVP);
+    }
+    const killedSide = _unitSide(unit);
+    const vp = _calcUnitVP(unit);
+    if (killedSide === 'axis') return { allied: vp, axis: 0 };
+    return { allied: 0, axis: vp };
+}
+
+// Если юнит оказался в hex за пределами игровой зоны — элиминировать его (с VP по сценарию).
+async function _eliminateIfOutOfBounds(unitId) {
+    const u = State.units[unitId];
+    if (!u || !u.hex) return;
+    if (!_isOutOfBounds(u.hex)) return;
+    console.log(`[OOB] ${unitId} (${u.hex.col},${u.hex.row}) — eliminated`);
+    await _killUnit(unitId, { cause: 'oob', hex: u.hex });
 }
 
 // A26 Control: Good Order Infantry MMC в hex'е без enemy → её faction получает контроль.
@@ -1400,11 +1440,12 @@ function _calc_effect_for_targets_CC(list, side) {
 async function _apply_effect_CC(effects) {
     for (const [uid, eff] of Object.entries(effects)) {
         if (eff === 'kia') {
-            await _eliminateWithKIA(uid);
+            const u = State.units[uid];
+            await _killUnit(uid, { cause: 'cc', hex: u && u.hex });
         } else if (eff === 'reduce') {
             const u = State.units[uid];
-            if (u?.halfSquad) _replace_unit(uid, u.halfSquad, uid);
-            else await _eliminateWithKIA(uid);
+            if (u && u.halfSquad) _replace_unit(uid, u.halfSquad, uid);
+            else                  await _killUnit(uid, { cause: 'cc', hex: u && u.hex });
         }
     }
 }
@@ -1814,8 +1855,8 @@ async function _handleInterdiction(unit) {
     if (outcome === 'ok') return false;
 
     if (outcome === 'eliminated') {
-        await _eliminateWithKIA(unit.id);
-        if (escort) await _eliminateWithKIA(escort.id);   // leader разделяет судьбу — eliminated
+        await _killUnit(unit.id, { cause: 'interdiction', hex: unit.hex });
+        if (escort) await _killUnit(escort.id, { cause: 'interdiction', hex: escort.hex });   // leader разделяет судьбу
         _finalizeRoutState();
         return true;
     }
@@ -1863,6 +1904,11 @@ function _applyRoutMove(unit, targetHex, isWoodsRoad) {
     if (escort) {
         State.setUnit(escort.id, 'hex', targetHex);
         console.log(`[RtPh] escort ${escort.id} → (${targetHex.col},${targetHex.row})`);
+    }
+    // Out-of-bounds — за границы карты (пример: раут в off-map hex): элиминация.
+    if (_isOutOfBounds(targetHex)) {
+        _eliminateIfOutOfBounds(unit.id);
+        if (escort) _eliminateIfOutOfBounds(escort.id);
     }
 }
 
@@ -1995,13 +2041,23 @@ function _adjacentUnbrokenEnemy(unit) {
     ) || null;
 }
 
-// Показывает KIA-визуал на юните, ждёт немного, затем удаляет.
+// Визуальная эллиминация: ставит kia, ждёт анимацию, удаляет из State. VP не трогает.
 async function _eliminateWithKIA(id) {
-    const u = State.units[id];
-    if (u) _grantAlliedVP(_calcUnitVP(u));   // VP за уничтожение Axis
     State.setUnit(id, 'kia', true);
     await sleep(700);
     _remove_unit(id);
+}
+
+// Полная эллиминация: сначала VP по сценарному правилу, потом визуал.
+// Используется всеми местами, где юнит умирает (fire, rout, CC, OOB, repair-fail и т.д.).
+async function _killUnit(id, context) {
+    const u = State.units[id];
+    if (u) {
+        const vp = _vpOnElimination(u, context);
+        _grantVP('allied', vp.allied);
+        _grantVP('axis',   vp.axis);
+    }
+    await _eliminateWithKIA(id);
 }
 
 // Финализация раута для одного юнита (safe): очистка полей + overlay + кнопки.
@@ -2336,6 +2392,7 @@ function _remove_unit(unitId) {
     if (hexOfDead) recalculateHex(hexOfDead);
 
     layer?.batchDraw();
+    _refreshGroupPanel();   // убитый мог быть в группе — обновить панель
 }
 
 // заменить юнит на новый (по templateId) в том же гексе — с флип-анимацией.
@@ -2350,7 +2407,7 @@ function _replace_unit(oldId, newTemplateId, newId) {
     if (AXIS_NATIONS.has(old.nation)
         && old.type === 'squad' && old.size !== 'halfSquad'
         && newTpl && newTpl.size === 'halfSquad') {
-        _grantAlliedVP(1);
+        _grantVP('allied', 1);
     }
 
     const inherit = {
@@ -2420,7 +2477,8 @@ async function _apply_changes_for_targets(changes) {
     for (const [id, state] of Object.entries(changes)) {
         // eliminated — юнит уничтожается физически (KIA-визуал + пауза + remove)
         if (state === 'eliminated') {
-            await _eliminateWithKIA(id);
+            const u = State.units[id];
+            await _killUnit(id, { cause: 'fire', hex: u && u.hex });
             continue;
         }
         // reduced — squad заменяется на свой half-squad
@@ -2459,6 +2517,7 @@ async function _apply_changes_for_targets(changes) {
 
         State.setUnit(id, state, true);
         // Rules могли замутировать флаги — синкаем через State.setUnit чтобы Renderer их подхватил
+        if (u && u.broken && state !== 'broken') State.setUnit(id, 'broken', true);   // broken уже взведён правилом (например, wounded original-12), а state=='wounded' сам broken не трогает
         if (u?.desperationMorale) State.setUnit(id, 'desperationMorale', true);
         // NMC-fail сбрасывает Pin и CX — синкаем чтобы Renderer убрал маркеры
         // (только для infantry — у weapon нет pinned/exhausted)
@@ -2558,6 +2617,12 @@ async function _apply_movement_result_in_State_for_all_MG(result, targetHex, ove
         });
     });
     _updateHexControl(targetHex);   // A26: Good Order MMC в hex'е без enemy → контроль нашей стороне
+    // Out-of-bounds: если targetHex вне scen.playArea — все вошедшие юниты элиминируются.
+    if (_isOutOfBounds(targetHex)) {
+        for (const unitId of Object.keys(result.unitChanges)) {
+            await _eliminateIfOutOfBounds(unitId);
+        }
+    }
 
     // Residual FP (правило 3.3.5): если в хексе есть residual counter,
     // все только что вошедшие юниты атакуются одной IFT DR (leader first через _processMC)
@@ -2650,9 +2715,11 @@ function _addToMovementGroup(unitId) {
         return;
     }
     if (!State.movementGroup.includes(unitId)) {
-        State.movementGroup.push(unitId);
-        _setInMovementGroup(unitId, true);
-        _refreshMGButtons();
+        State.movementGroup.push(unitId);              // добавить в массив группы
+        _setInMovementGroup(unitId, true);             // поставить флаг на юнита + его possessed weapons
+        _refreshMGButtons();                           // пересчитать кнопки MG (DoubleTime/Assault/Smoke/Drop/Recover)
+        State.lastGroupInteracted = 'mg';              // пометить что последний клик был по MG
+        _refreshGroupPanel();                          // перерисовать правую панель с новым составом
     }
 }
 
@@ -2705,14 +2772,74 @@ function _addToFireGroup(unitId) {
         return;
     }
     if (!State.fireGroup.includes(unitId)) {
-        State.fireGroup.push(unitId);
-        State.setUnit(unitId, 'inFireGroup', true);
-
-        const key = `${unit.hex.col},${unit.hex.row}`;
+        State.fireGroup.push(unitId);                               // добавить в массив группы
+        State.setUnit(unitId, 'inFireGroup', true);                 // поднять флаг (рендерер нарисует рамку на юните)
+        const key = `${unit.hex.col},${unit.hex.row}`;              // ключ hex'а для списка «гексов стрелков»
         if (!State.fireGroupHexesArray.some(h => `${h.col},${h.row}` === key)) {
-            State.fireGroupHexesArray.push({ col: unit.hex.col, row: unit.hex.row });
+            State.fireGroupHexesArray.push({ col: unit.hex.col, row: unit.hex.row });   // новый hex в списке стрелков
         }
+        State.lastGroupInteracted = 'fg';                           // пометить что последний клик был по FG
+        _refreshGroupPanel();                                       // перерисовать правую панель
     }
+}
+
+// --- Панель групп (MG/FG) ----------------------------------------------------
+
+// Какую группу показывать (или null если обе пусты).
+// Приоритет у последней активной группы; если она пуста — показываем ту, где есть юниты.
+function _pickGroupToShow() {
+    const mg = State.movementGroup;
+    const fg = State.fireGroup;
+    if (State.lastGroupInteracted === 'fg' && fg.length) return fg;
+    if (State.lastGroupInteracted === 'mg' && mg.length) return mg;
+    if (mg.length) return mg;
+    if (fg.length) return fg;
+    return null;
+}
+
+// Собрать layout панели групп из списка id юнитов.
+// Возвращает {x, y, w, h, items} — где x/y/w/h это рамка панели на экране,
+// а items — [{id, x, y, image}] с абсолютными экранными координатами и ссылкой на картинку.
+function _computeGroupPanelLayout(unitIds) {
+    // Константы раскладки — локальные, нужны только тут.
+    const PANEL_Y            = 250;   // фиксированная вертикаль под кубиками и VP-счётчиками
+    const PANEL_RIGHT_MARGIN = 51;    // отступ от правого края экрана
+    const PAD_X              = 24;    // внутренний горизонтальный паддинг панели
+    const PAD_Y              = 8;     // внутренний вертикальный паддинг панели
+    const GAP                = 4;     // зазор между иконками по вертикали
+
+    // Размеры панели: одна иконка по ширине, по высоте — сумма всех иконок с зазорами + паддинги.
+    const w = UNIT_IMAGE_SIZE + PAD_X * 2;
+    const h = unitIds.length * UNIT_IMAGE_SIZE
+            + (unitIds.length - 1) * GAP
+            + PAD_Y * 2;
+
+    // Положение самой панели на экране: right-anchored (упираем в правый край с отступом),
+    // Y фиксированный.
+    const stage = State.uiLayer.getStage();
+    const panelX = stage.width() - w - PANEL_RIGHT_MARGIN;
+    const panelY = PANEL_Y;
+
+    // Иконки — одна колонка, сразу в абсолютных экранных координатах.
+    // Картинку выбираем в зависимости от broken-флага юнита.
+    const items = unitIds.map((id, idx) => {
+        const u = State.units[id];
+        return {
+            id,
+            x: panelX + PAD_X,
+            y: panelY + PAD_Y + idx * (UNIT_IMAGE_SIZE + GAP),
+            image: u && u.broken ? u.brokenImage : (u && u.image),
+        };
+    });
+
+    return { x: panelX, y: panelY, w, h, items };
+}
+
+// Главная точка: решить что показать и уведомить UI.
+function _refreshGroupPanel() {
+    const unitIds = _pickGroupToShow();
+    if (!unitIds) { UIState.hideGroupPanel(); return; }
+    UIState.showGroupPanel(_computeGroupPanelLayout(unitIds));
 }
 
 

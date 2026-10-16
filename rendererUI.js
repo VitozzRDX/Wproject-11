@@ -1,6 +1,6 @@
 import { UIState } from './uiState.js';
 import { hexToPixel, R } from './hexUtils.js';
-import { TEMPLATES, loadImage, getImage } from './unitloading.js';
+import { TEMPLATES, loadImage, getImage, UNIT_IMAGE_SIZE } from './unitloading.js';
 
 // Два слоя: uiLayer — screen-fixed (кнопки, крутилка); worldFxLayer — world-anchored (LoS, residual, smoke).
 let uiLayer;
@@ -13,6 +13,7 @@ const routShelterNodes = [];       // Konva-ноды подсветки поте
 const routPathNodes    = [];       // Konva-ноды подсветки коридора путей до укрытий (purple)
 const ccHexNodes       = [];       // Konva-ноды подсветки CC-хексов (orange)
 const setupBoundsNodes = [];       // Konva-ноды подсветки setup-зоны (зелёная заливка)
+const groupPanelNodes = [];        // Konva-ноды панели групп (фон + иконки); чистим при redraw и hide
 const smokeNodes       = [];       // Konva-группы анимированного дыма (нужны для cleanAll + save/load)
 
 // 3×3 позиции точек на лицах 1-6. [col, row] где col/row ∈ {0,1,2}.
@@ -72,6 +73,8 @@ export const RendererUI = {
         uiLayer?.findOne('.turnText')?.destroy();
         uiLayer?.findOne('.hillCounter')?.destroy();
         uiLayer?.findOne('.vpCounter')?.destroy();
+        uiLayer?.findOne('.axisVpCounter')?.destroy();
+        RendererUI.removeGroupPanel();
         uiLayer?.batchDraw();
     },
 
@@ -100,6 +103,9 @@ export const RendererUI = {
             if (action === 'setTurnText')    RendererUI.drawTurnText(data.text);
             if (action === 'setHillControlText') RendererUI.drawHillControlText(data.text);
             if (action === 'setAlliedVPText')    RendererUI.drawAlliedVPText(data.text);
+            if (action === 'setAxisVPText')      RendererUI.drawAxisVPText(data.text);
+            if (action === 'showGroupPanel')     RendererUI.drawGroupPanel(data);
+            if (action === 'hideGroupPanel')     RendererUI.removeGroupPanel();
             if (action === 'flashLOS')       RendererUI.drawLOSLine(data.from, data.to, data.color);
             if (action === 'clearLOS')       RendererUI.clearLOS();
             if (action === 'flashHitPoints') RendererUI.drawHitPoints(data);
@@ -485,6 +491,56 @@ export const RendererUI = {
             text, fill: 'white', fontSize: 12, fontStyle: 'bold',
             align: 'center',
             name: 'vpCounter',
+            listening: false,
+        });
+        uiLayer.add(t);
+        uiLayer.batchDraw();
+    },
+
+    // Рисует панель групп: фон + иконки по координатам из layout.
+    drawGroupPanel(layout) {
+        RendererUI.removeGroupPanel();
+        // Фон панели.
+        const bg = new Konva.Rect({
+            x: layout.x, y: layout.y, width: layout.w, height: layout.h,
+            fill: 'rgba(0,0,0,0.7)', cornerRadius: 4,
+            name: 'groupPanel',
+            listening: false,
+        });
+        uiLayer.add(bg);
+        groupPanelNodes.push(bg);
+        // Иконки — каждая со своей картинкой и позицией из items (payload несёт image ref).
+        for (const it of layout.items) {
+            if (!it.image) continue;
+            const node = new Konva.Image({
+                x: it.x, y: it.y,
+                image: it.image,
+                width: UNIT_IMAGE_SIZE, height: UNIT_IMAGE_SIZE,
+                listening: false,
+            });
+            uiLayer.add(node);
+            groupPanelNodes.push(node);
+        }
+        uiLayer.batchDraw();
+    },
+
+    // Снять панель групп — чистит все ноды из трекера.
+    removeGroupPanel() {
+        for (const n of groupPanelNodes) n.destroy();
+        groupPanelNodes.length = 0;
+        uiLayer?.batchDraw();
+    },
+
+    // Счётчик Axis VP под Allied-счётчиком.
+    drawAxisVPText(text) {
+        uiLayer?.findOne('.axisVpCounter')?.destroy();
+        const stage = uiLayer.getStage();
+        const t = new Konva.Text({
+            x: stage.width() - 162 + 10, y: 225,
+            width: 100,
+            text, fill: 'white', fontSize: 12, fontStyle: 'bold',
+            align: 'center',
+            name: 'axisVpCounter',
             listening: false,
         });
         uiLayer.add(t);

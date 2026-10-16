@@ -231,11 +231,8 @@ async function loadScenario(name) {
     // Контроль гексов (A26): берём пред-посчитанный словарь из сценария.
     State.hexControl = scen.hexControl ? { ...scen.hexControl } : {};
     _initHillCounter(scen);
-    // Стартовый VP-счётчик (порог ещё не определён — ждём бросок куба).
-    // Задержка — пул-юниты setup спавнятся async после этого места и легли бы поверх текста.
-    if (scen.winConditions?.atGameEnd?.type === 'vp') {
-        setTimeout(() => UIState.setAlliedVPText(`VP: 0 / -`), 100);
-    }
+    // UI-счётчик VP появляется только когда сценарий поставит цель
+    // (происходит в setupPhase/applyDiceRoll или напрямую, если сценарий без ролла).
     await unitloading.createAndLoadUnits(unitLayer, scen.units);
     stage.add(unitLayer);
     worldFxLayer.moveToTop();   // эффекты (LoS, residual, smoke) над юнитами

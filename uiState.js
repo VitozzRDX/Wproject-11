@@ -85,6 +85,19 @@ export const UIState = {
         this.subscribers.forEach(sub => sub('setAlliedVPText', null, { text }));
     },
 
+    // Счётчик VP Axis под Allied-счётчиком: "VP: 3 / 12".
+    setAxisVPText(text) {
+        this.subscribers.forEach(sub => sub('setAxisVPText', null, { text }));
+    },
+
+    // Панель с иконками юнитов текущей MG/FG (правый край под счётчиками).
+    showGroupPanel(payload) {
+        this.subscribers.forEach(sub => sub('showGroupPanel', null, payload));
+    },
+    hideGroupPanel() {
+        this.subscribers.forEach(sub => sub('hideGroupPanel', null, null));
+    },
+
     subscribe(handler) {
         this.subscribers.push(handler);
     },

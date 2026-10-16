@@ -49,8 +49,11 @@ export const State = {
     setupSelectedUnits: [],            // id'шки выбранных юнитов setup (0..3; 1 — обычный выбор, 3 — dblclick-набор)
     playerTurn: 1,                     // 1..gameLength; +1 на каждый side-swap (3.9 Turn Record)
     hexControl: {},                    // {"col-row": "axis"|"allied"} — какая сторона контролирует hex (A26)
-    alliedVP: 0,                       // накопленные Allied VP (убитые Axis)
-    alliedVpTarget: null,              // VP-порог; выставляется при setup-dice-roll
+    alliedVP: 0,                       // накопленные Allied VP (убитые юниты по правилу сценария)
+    alliedVpTarget: null,              // VP-порог Союзников; ставит только сценарий
+    axisVP: 0,                         // накопленные Axis VP (убитые юниты по правилу сценария)
+    axisVpTarget: null,                // VP-порог Оси; ставит только сценарий
+    lastGroupInteracted: null,         // 'mg' | 'fg' | null — какая группа была последней активной (для панели групп)
     setupDiceRolled: false,            // true если dice-roll уже выполнен для текущей стороны
     uiLayer: null,                     // ссылка на uiLayer — нужна setupPhase для перемещения нод между слоями
 

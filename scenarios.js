@@ -179,6 +179,27 @@ export const scenarios = {
     },
     orchardInSeason: true,   // 28 августа — orchard в сезоне (апрель-октябрь)
     gameLength: 14,          // 7 full turns = 14 player turns
+    playArea: { col: [21, 49], row: [1, 11] },   // границы; выход — элиминация юнита
+
+    // Правило VP при эллиминации (вызывается движком).
+    // Возвращает {allied: N, axis: M} — сколько очков начислить каждой стороне.
+    vpOnElimination(unit, context, fullTurn, defaultVP) {
+        const axisNations = new Set(['german', 'italian', 'japanese']);
+        const killedSide = axisNations.has(unit.nation) ? 'axis' : 'allied';
+
+        // С 5-го полного раунда немцы, вышедшие за южную границу (col < 21), VP не дают.
+        if (context.cause === 'oob'
+            && killedSide === 'axis'
+            && context.hex && context.hex.col < this.playArea.col[0]
+            && fullTurn >= 5) {
+            return { allied: 0, axis: 0 };
+        }
+
+        // Остальные случаи — обычное правило: другая сторона получает ценность убитого.
+        const vp = defaultVP(unit);
+        if (killedSide === 'axis') return { allied: vp, axis: 0 };
+        return { allied: 0, axis: vp };
+    },
     winConditions: {
         side: 'allied',
         // Первое: автопобеда в конце TURN 4 за контроль hill/crest.

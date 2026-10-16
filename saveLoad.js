@@ -33,7 +33,7 @@ const STATE_FIELDS = [
     'movementGroup', 'fireGroup', 'fireGroupHexesArray', 'fired_from_on_target_in_hex',
     // setup-фаза
     'setupSide', 'idsInSetupPool', 'setupSelectedUnits', 'setupDiceRolled',
-    'playerTurn', 'hexControl', 'alliedVP', 'alliedVpTarget',
+    'playerTurn', 'hexControl', 'alliedVP', 'alliedVpTarget', 'axisVP', 'axisVpTarget',
 ];
 
 // Поля юнита, которые НЕ сохраняем — Konva-ноды и Map/Set, не JSON-сериализуются.
@@ -137,11 +137,15 @@ function _restoreTurnText() {
     setTimeout(() => UIState.setTurnText(`TURN ${fullTurn} / ${totalFullTurns}`), 50);
 }
 
-// Пере-показать VP-счётчик Allied после load (значения уже восстановлены из STATE_FIELDS).
+// Пере-показать VP-счётчики после load (значения уже восстановлены из STATE_FIELDS).
+// Показываем только те, у которых сценарий поставил цель.
 function _restoreVPCounter() {
-    if (State.currentScenario?.winConditions?.atGameEnd?.type !== 'vp') return;
-    const target = State.alliedVpTarget == null ? '-' : State.alliedVpTarget;
-    setTimeout(() => UIState.setAlliedVPText(`VP: ${State.alliedVP ?? 0} / ${target}`), 50);
+    if (State.alliedVpTarget !== null) {
+        setTimeout(() => UIState.setAlliedVPText(`VP: ${State.alliedVP} / ${State.alliedVpTarget}`), 50);
+    }
+    if (State.axisVpTarget !== null) {
+        setTimeout(() => UIState.setAxisVPText(`VP: ${State.axisVP} / ${State.axisVpTarget}`), 50);
+    }
 }
 
 // Пере-посчитать и показать счётчик контроля hill-гексов после load.
@@ -202,10 +206,11 @@ function _destroyCurrentUnits() {
 }
 
 // Залить STATE_FIELDS из snapshot + восстановить ссылку на сценарий по имени.
-// Сначала всё в undefined — защита от мусора в полях, которых в snapshot нет.
+// Поля, которых нет в snapshot (старый сейв с меньшим набором), сохраняют инициализацию из state.js.
 function _restoreStateFields(snapshot) {
-    for (const field of STATE_FIELDS) State[field] = undefined;
-    for (const field of STATE_FIELDS) State[field] = snapshot[field];
+    for (const field of STATE_FIELDS) {
+        if (field in snapshot) State[field] = snapshot[field];
+    }
     State.currentScenario = snapshot.setupScenarioName ? scenarios[snapshot.setupScenarioName] : null;
 }
 

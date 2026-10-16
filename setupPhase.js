@@ -85,12 +85,15 @@ export async function applyDiceRoll(roll) {
         }
     }
     State.setupDiceRolled = true;
-    // Поставим VP-порог Allied по результату броска.
+    // Поставим VP-порог Allied по результату броска (если сценарий это предусмотрел).
     const winConditions = State.currentScenario.winConditions;
-    const vpTargets = winConditions && winConditions.atGameEnd && winConditions.atGameEnd.targets;   // путь может отсутствовать в сценарии без VP-условия → каждый шаг проверяем на null
+    const vpTargets = winConditions && winConditions.atGameEnd && winConditions.atGameEnd.targets;
     if (vpTargets) {
-        State.alliedVpTarget = vpTargets[String(roll)] ?? null;
-        UIState.setAlliedVPText(`VP: ${State.alliedVP ?? 0} / ${State.alliedVpTarget ?? '-'}`);
+        const target = vpTargets[String(roll)];
+        if (target !== undefined) {
+            State.alliedVpTarget = target;
+            UIState.setAlliedVPText(`VP: ${State.alliedVP} / ${State.alliedVpTarget}`);
+        }
     }
     UIState.removeButton('RollDice');
     refreshSetupPanel();
