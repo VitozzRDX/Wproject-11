@@ -110,9 +110,9 @@ export const TEMPLATES = {
   'so_L81': { ...SovietLeader, morale: 8, brokenMorale: 8, leadershipModifier: -1, selfRally: true, src: './graf/ruL81.gif', brokenSrc: './graf/ruL81b.gif' },
 
   // American squads / HS (elr=20 explicit — не подвержены quality reduce в этом сценарии)
-  'am_667': { ...AmericanSquad, quality: 'Elite',   firepower: 6, range: 6, morale: 7, brokenMorale: 7, smokeExponent: 3, elr: 20, lowerQuality: null, halfSquad: 'am_347', selfRally: true, src: './graf/am667S.gif', brokenSrc: './graf/amc7b.gif' },
-  'am_347': { ...AmericanSquad, quality: 'Elite',   firepower: 3, range: 4, morale: 7, brokenMorale: 7, size: 'halfSquad', src: './graf/am347H.gif', brokenSrc: './graf/amc7b.gif' },
-  'am_536': { ...AmericanSquad, quality: '2ndLine', firepower: 5, range: 3, morale: 6, brokenMorale: 6, smokeExponent: 2, elr: 20, lowerQuality: null, halfSquad: 'am_226', src: './graf/am536S.gif', brokenSrc: './graf/amh6b.gif' },
+  'am_667': { ...AmericanSquad, quality: 'Elite',   firepower: 6, range: 6, morale: 7, brokenMorale: 7, smokeExponent: 3, elr: 20, lowerQuality: null, halfSquad: 'am_347', selfRally: true, underlinedFP: true, src: './graf/am667S.gif', brokenSrc: './graf/amc7b.gif' },
+  'am_347': { ...AmericanSquad, quality: 'Elite',   firepower: 3, range: 4, morale: 7, brokenMorale: 7, size: 'halfSquad', underlinedFP: true, src: './graf/am347H.gif', brokenSrc: './graf/amc7b.gif' },
+  'am_536': { ...AmericanSquad, quality: '2ndLine', firepower: 5, range: 3, morale: 6, brokenMorale: 6, smokeExponent: 2, elr: 20, lowerQuality: null, halfSquad: 'am_226', underlinedFP: true, src: './graf/am536S.gif', brokenSrc: './graf/amh6b.gif' },
   'am_226': { ...AmericanSquad, quality: '2ndLine', firepower: 2, range: 2, morale: 6, brokenMorale: 6, size: 'halfSquad', src: './graf/am226H.gif', brokenSrc: './graf/amh6b.gif' },
 
   // American leaders

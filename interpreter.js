@@ -656,7 +656,7 @@ const KEY_RULES = [
 export function interpretEvent(e) {
 
     const ctx = createContext(e);
-    console.log('[click] ctx=', ctx);
+    //console.log('[click] ctx=', ctx);
 
     const rule = RULES.find(r => matchRule(r, ctx));  // первое подошедшее правило
     console.log('[click] matched rule:', rule?.name ?? 'NONE');
@@ -714,6 +714,11 @@ export function interpretLassoRelease(hexes) {
             if (anyFiring) Engine.handlers.dblClickAddingToFireGroup(anyFiring);
         }
     }
+}
+
+// Hover по hex'у — для показа FP при наведении на цель в огневой фазе.
+export function interpretHover(hex) {
+    Engine.handlers.HoverFireTarget({ hex });
 }
 
 export function interpretKeyEvent(e) {

@@ -98,6 +98,22 @@ export const UIState = {
         this.subscribers.forEach(sub => sub('hideGroupPanel', null, null));
     },
 
+    // Панель целей по итогу огня: по строке на цель, слева before, справа after.
+    showTargetPanel(targets) {
+        this.subscribers.forEach(sub => sub('showTargetPanel', null, { targets }));
+    },
+    hideTargetPanel() {
+        this.subscribers.forEach(sub => sub('hideTargetPanel', null, null));
+    },
+
+    // Текст с итоговым FP у hex'а-цели при hover в огневой фазе.
+    setHoverFP(hex, fp) {
+        this.subscribers.forEach(sub => sub('setHoverFP', null, { hex, fp }));
+    },
+    clearHoverFP() {
+        this.subscribers.forEach(sub => sub('clearHoverFP', null, null));
+    },
+
     subscribe(handler) {
         this.subscribers.push(handler);
     },

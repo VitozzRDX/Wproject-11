@@ -53,7 +53,7 @@ export const State = {
     alliedVpTarget: null,              // VP-порог Союзников; ставит только сценарий
     axisVP: 0,                         // накопленные Axis VP (убитые юниты по правилу сценария)
     axisVpTarget: null,                // VP-порог Оси; ставит только сценарий
-    lastGroupInteracted: null,         // 'mg' | 'fg' | null — какая группа была последней активной (для панели групп)
+    lastGroupInteracted: null,         // 'mg' | 'fg' | 'targets' | null — что показывать в правой панели
     setupDiceRolled: false,            // true если dice-roll уже выполнен для текущей стороны
     uiLayer: null,                     // ссылка на uiLayer — нужна setupPhase для перемещения нод между слоями
 

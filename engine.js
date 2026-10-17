@@ -32,6 +32,25 @@ const handlers = {
         _addToFireGroup(ctx.unitId);
     },
 
+    // Hover по hex'у в огневой фазе — пересчитать и показать FP всей FG по этой цели.
+    HoverFireTarget: (ctx) => {
+        const hex   = ctx.hex;
+        const phase = PhaseManager.getPhase();
+        const firePhases = ['prepFire', 'advancingFire', 'defensiveFire', 'movement'];
+        if (!firePhases.includes(phase) || !State.fireGroup.length) {
+            UIState.clearHoverFP();
+            return;
+        }
+        let targets = [];
+        if (phase === 'movement')                                   targets = _movedTargetsInHex(hex);
+        else if (phase === 'prepFire' || phase === 'advancingFire') targets = _defenderInfantryInHex(hex);
+        else if (phase === 'defensiveFire')                         targets = _attackerInfantryInHex(hex);
+        if (!targets.length) { UIState.clearHoverFP(); return; }
+        const units = State.fireGroup.map(id => State.units[id]);
+        const fp = units.reduce((s, u) => s + Rules.calcFirepower(u, hex), 0);
+        UIState.setHoverFP(hex, fp);
+    },
+
     // Dbl-клик по инфантри в MPh — добавляем всех инфантри своей стороны этого гекса в MG.
     // Оружие не трогаем — оно переедет вместе с possessor'ом.
     dblClickAddingToMovingGroup: (unit) => {
@@ -153,6 +172,8 @@ const handlers = {
 
         const targetHex = pixelToHex(ctx.pos.x, ctx.pos.y);
 
+            // Ждём выбор UseWoods/UseRoad — любой клик по карте игнорируем до нажатия кнопки.
+    if (State.pendingMove) return;
         // Woods-Road — отложить мув, спросить игрока
         if (Rules._hasWoodsRoad(targetHex) && !State.pendingMove) {
             State.pendingMove = { targetHex };
@@ -177,6 +198,12 @@ const handlers = {
             State.pendingMove = null;
             UIState.removeButton('UseWoods');
             UIState.removeButton('UseRoad');
+            return;
+        }
+        // Активная панель целей — Esc в первую очередь гасит её.
+        if (State.lastGroupInteracted === 'targets') {
+            State.lastGroupInteracted = null;
+            UIState.hideTargetPanel();
             return;
         }
         if (State.fireGroup.length > 0) {
@@ -762,6 +789,11 @@ const handlers = {
         const targetHex = pixelToHex(ctx.pos.x, ctx.pos.y);
         if (!isAdjacent(unit.hex, targetHex)) return;
 
+        if (!Rules.checkOverstack(targetHex, [uid], State.units)) {
+            console.log(`[APh] ${uid}: overstack в (${targetHex.col},${targetHex.row}) — отказ`);
+            return;
+        }
+
         const isWoodsRoad = Rules._hasWoodsRoad(targetHex);
         const cost = Rules.checkCost(targetHex, unit.hex, isWoodsRoad ? 'dirtRoad' : null);   // Woods-Road автоматически как road (1 MF)
         const effectiveMF = unit.mf - Rules._portageExcess(unit, State.units, [uid]);          // MF за вычетом portage excess
@@ -869,6 +901,7 @@ const handlers = {
                 if (u.hasStartedMoving)      State.setUnit(u.id, 'hasStartedMoving', false);
                 if (u.movementCompleted)     State.setUnit(u.id, 'movementCompleted', false);
                 if (u.wasExhaustedLastTurn)  State.setUnit(u.id, 'wasExhaustedLastTurn', false);
+                if (u.doubleTime)            State.setUnit(u.id, 'doubleTime', false);
             }
         }
 
@@ -890,6 +923,8 @@ const handlers = {
             State.original_group = [];
             State.splitted_group = [];
             State.mfspent = false;
+            _refreshGroupPanel();   // MG очищена при смене фазы — панель должна скрыться
+            UIState.hideTargetPanel();   // target-панель (если осталась от огня в MPh) — скрыть
         }
 
         // Правило DFPh: убрать все First/Final Fire counters в конце фазы.
@@ -986,6 +1021,15 @@ const handlers = {
                 let mf = u.baseMF;
                 if (u.wounded && u.type === 'leader') mf = Math.min(mf, 3);
                 State.setUnit(u.id, 'mf', mf);
+
+                        // Пополнить лидер-бонус и дорожный бонус из шаблона — новый ход = свежий budget.
+                const tpl = TEMPLATES[u.templateId];
+                if (tpl) {
+                    State.setUnit(u.id, 'leaderBonus', tpl.leaderBonus || 0);
+                    State.setUnit(u.id, 'roadBonus',   tpl.roadBonus   || 0);
+                }
+                if (u.usedWoodsRoad) State.setUnit(u.id, 'usedWoodsRoad', false);
+
             }
             console.log('[APh] MF reset for attacker Good Order infantry');
         }
@@ -1029,6 +1073,7 @@ const handlers = {
         if (prevPhase === 'advance') {
             for (const u of Object.values(State.units)) {
                 if (u.selectedForAdvance) State.setUnit(u.id, 'selectedForAdvance', false);
+                if (u.assaultMovement)    State.setUnit(u.id, 'assaultMovement', false);
             }
             State.advanceSelected = null;
         }
@@ -1042,6 +1087,7 @@ const handlers = {
         });
         UIState.removeButton('DoubleTime');
         UIState.removeButton('AssaultMovement');
+        _refreshGroupPanel();   // mf вырос на +2 — обновить число в панели
     },
     AssaultMovement: () => {
         if (!Rules.checkIfAssaultMovementForMovementGroupIsValid(State.movementGroup, State.units)) return;
@@ -2092,6 +2138,16 @@ async function _handleFire(ctx) {
     const firegroupUnits    = State.fireGroup.map(id => State.units[id]);
     const weaponsKeepingRoF = new Set();
 
+    // Цели ДО огня — для target-панели (одна строка на цель: before | after).
+    const getPhaseTargets = () => {
+        if (phase === 'movement')                              return _movedTargetsInHex(targetHex);
+        if (phase === 'prepFire' || phase === 'advancingFire') return _defenderInfantryInHex(targetHex);
+        if (phase === 'defensiveFire')                         return _attackerInfantryInHex(targetHex);
+        return [];
+    };
+    const initialTargetUids = getPhaseTargets().map(u => u.id);
+    const beforeSnap        = _snapshotTargetsBeforeFireEffect(initialTargetUids);
+
     // Отсеиваем стрелков без LoS/hindrance≥6 → validHexes. Затем bins по adjacency → subFGsArray.
     const validHexes  = Rules.filter_hexes_with_Los(State.fireGroupHexesArray, targetHex, State.orchardInSeason);
 
@@ -2234,6 +2290,14 @@ async function _handleFire(ctx) {
     State.fireGroup.forEach(id => State.setUnit(id, 'inFireGroup', false));
     State.fireGroup = [];
     State.fireGroupHexesArray = [];
+
+    // Собрать target-панель: before (снятый в начале) + after (сейчас) → показать.
+    const afterSnap = _snapshotTargetsAfterFireEffect(initialTargetUids, beforeSnap);
+    const panel     = _createTargetPanel(beforeSnap, afterSnap);
+    if (panel.length) {
+        State.lastGroupInteracted = 'targets';
+        UIState.showTargetPanel(panel);
+    }
 }
 
 // Разбивает FG на sub-FG по LoS + adjacency компонентам. validHexes — уже вычисленный
@@ -2617,6 +2681,7 @@ async function _apply_movement_result_in_State_for_all_MG(result, targetHex, ove
         });
     });
     _updateHexControl(targetHex);   // A26: Good Order MMC в hex'е без enemy → контроль нашей стороне
+    _refreshGroupPanel();           // mf юнитов изменился, hex тоже → пересчитать число над панелью
     // Out-of-bounds: если targetHex вне scen.playArea — все вошедшие юниты элиминируются.
     if (_isOutOfBounds(targetHex)) {
         for (const unitId of Object.keys(result.unitChanges)) {
@@ -2835,11 +2900,94 @@ function _computeGroupPanelLayout(unitIds) {
     return { x: panelX, y: panelY, w, h, items };
 }
 
-// Главная точка: решить что показать и уведомить UI.
+// MF, которое будет показано в панели — гипотетически возможный остаток для стопки.
+// Базовый u.mf + лидер-бонус (если в группе есть лидер) + road-бонус (если весь путь
+// был по дороге И юнит не использовал Woods-Road опцию). Последний hex в path и есть текущий,
+// так что отдельная проверка «на дороге» не нужна.
+function _calc_mf_to_show_in_panel(u, mg, units) {
+    const leader = Rules.hasLeader(mg, units) ? u.leaderBonus : 0;
+    const road   = Rules._all_path_is_road(u.path) && !u.usedWoodsRoad ? u.roadBonus : 0;
+    return u.mf + leader + road;
+}
+
+// Остаток MF группы = минимум по членам (стопка идёт в темпе самого медленного).
+// null если группа пуста.
+function _groupMF(mg) {
+    if (!mg.length) return null;
+    return Math.min(...mg.map(id => _calc_mf_to_show_in_panel(State.units[id], mg, State.units)));
+}
+
+// Эффективный вклад одного юнита в групповой FP (без дистанционных множителей).
+// Учитывает broken, лидера (0), pinned, SFF/FPF, AFPh halving + Assault Fire.
+function _unitFPForPanel(u) {
+    if (u.broken) return 0;
+    if (u.type === 'leader') return 0;
+    let fp = u.pinned ? u.firepower / 2 : (u.firepower || 0);
+    if (u.firingStatus === 'FirstFire') fp = fp / 2;
+    if (u.firingStatus === 'FinalFire') fp = fp / 2;
+    if (PhaseManager.getPhase() === 'advancingFire') {
+        fp = fp / 2;
+        if (u.underlinedFP && u.type === 'squad') {
+            fp = Math.ceil(fp) + 1;
+        } else {
+            fp = Math.floor(fp);
+        }
+    }
+    return fp;
+}
+
+// Групповой FP для панели — сумма эффективных вкладов членов FG.
+// Дистанционные множители (PBF/TPBF/long/range cap) не учитываются — цель ещё не выбрана.
+function _groupFP(fg) {
+    if (!fg.length) return null;
+    return fg.reduce((s, id) => s + _unitFPForPanel(State.units[id]), 0);
+}
+
+// Снимок иконок всех целей ДО применения эффекта огня. Массив [{id, image}].
+function _snapshotTargetsBeforeFireEffect(uids) {
+    return uids.map(uid => {
+        const u = State.units[uid];
+        return { id: uid, image: u.broken ? u.brokenImage : u.image };
+    });
+}
+
+// Снимок иконок всех целей ПОСЛЕ эффекта. Массив [{id, image, kia, pinned, wounded}].
+// Для KIA юнит уже удалён → берём картинку из beforeSnapshot и помечаем kia=true.
+function _snapshotTargetsAfterFireEffect(uids, beforeSnapshot) {
+    return uids.map(uid => {
+        const u = State.units[uid];
+        if (!u) {
+            const before = beforeSnapshot.find(entry => entry.id === uid);
+            return { id: uid, image: before ? before.image : null, kia: true, pinned: false, wounded: false };
+        }
+        return { id: uid, image: u.broken ? u.brokenImage : u.image, kia: false, pinned: !!u.pinned, wounded: !!u.wounded };
+    });
+}
+
+// Склеивает два снимка в payload панели: [{id, beforeImage, after}].
+function _createTargetPanel(beforeSnapshot, afterSnapshot) {
+    return beforeSnapshot.map(targetBefore => {
+        const targetAfter = afterSnapshot.find(candidate => candidate.id === targetBefore.id);
+        return {
+            id:          targetBefore.id,
+            beforeImage: targetBefore.image,
+            after:       targetAfter,
+        };
+    });
+}
+
+// Главная точка: решить что показать, собрать layout, добавить MF-число и уведомить UI.
 function _refreshGroupPanel() {
     const unitIds = _pickGroupToShow();
     if (!unitIds) { UIState.hideGroupPanel(); return; }
-    UIState.showGroupPanel(_computeGroupPanelLayout(unitIds));
+    const layout = _computeGroupPanelLayout(unitIds);
+    // MF — только для MG, FP — только для FG.
+    if (unitIds === State.movementGroup) {
+        layout.mf = _groupMF(unitIds);
+    } else if (unitIds === State.fireGroup) {
+        layout.fp = _groupFP(unitIds);
+    }
+    UIState.showGroupPanel(layout);
 }
 
 

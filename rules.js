@@ -97,6 +97,12 @@ function calcFirepower(unit, targetHex) {
     // AFPh (Advancing Fire): весь огонь идёт с половинной FP.
     if (PhaseManager.getPhase() === 'advancingFire') {
         fp = fp / 2;
+        // Assault Fire (A8.3): squad с underlined FP в пределах normal range → +1 FP, дробь вверх.
+        if (unit.underlinedFP && unit.type === 'squad' && dist <= rng) {
+            const before = fp;
+            fp = Math.ceil(fp) + 1;
+            console.log(`[AssaultFire] ${unit.id}: AFPh fp=${before} → ${fp} (+1 бонус)`);
+        }
     }
 
     if (dist > rng * 2) return 0;
@@ -1771,6 +1777,9 @@ export const Rules = {
 
     _isRoadHex,
     _hasWoodsRoad,
+    _all_path_is_road,
+    hasLeader,
+    calcFirepower,
     checkCost,
     checkOverstack,
 

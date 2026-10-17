@@ -335,6 +335,7 @@ async function init() {
 
     // Hover: поднять наведённый юнит. При смене наведённого — восстанавливаем z-порядок стопки предыдущего.
     let _hoveredUnitId = null;
+    let _lastHoverHex  = null;
 
     // --- Lasso: резиновая рамка для группового выбора ---
     let _dragStart     = null;    // точка начала drag в мировых координатах (null — не тянем)
@@ -379,11 +380,19 @@ async function init() {
         }
         // Обычный hover.
         const unitId = e.target.getAttr('unitId');
-        if (unitId === _hoveredUnitId) return;
-        const prevId = _hoveredUnitId;
-        _hoveredUnitId = unitId;
-        if (prevId) restoreUnitZ(prevId);
-        if (unitId) _raiseHoveredUnit(unitId);
+        if (unitId !== _hoveredUnitId) {
+            const prevId = _hoveredUnitId;
+            _hoveredUnitId = unitId;
+            if (prevId) restoreUnitZ(prevId);
+            if (unitId) _raiseHoveredUnit(unitId);
+        }
+        // Hover по hex'у — для показа итогового FP при наведении на цель в огневой фазе.
+        const pt = _worldPos();
+        const hoverHex = pixelToHex(pt.x, pt.y);
+        if (!_lastHoverHex || hoverHex.col !== _lastHoverHex.col || hoverHex.row !== _lastHoverHex.row) {
+            _lastHoverHex = hoverHex;
+            interpreter.interpretHover(hoverHex);
+        }
     });
 
     stage.on('mouseup', (e) => {

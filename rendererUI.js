@@ -14,6 +14,8 @@ const routPathNodes    = [];       // Konva-ноды подсветки кори
 const ccHexNodes       = [];       // Konva-ноды подсветки CC-хексов (orange)
 const setupBoundsNodes = [];       // Konva-ноды подсветки setup-зоны (зелёная заливка)
 const groupPanelNodes = [];        // Konva-ноды панели групп (фон + иконки); чистим при redraw и hide
+const targetPanelNodes = [];       // Konva-ноды панели целей по итогу огня
+let hoverFPNode = null;            // Konva.Text итогового FP у hex'а-цели при hover
 const smokeNodes       = [];       // Konva-группы анимированного дыма (нужны для cleanAll + save/load)
 
 // 3×3 позиции точек на лицах 1-6. [col, row] где col/row ∈ {0,1,2}.
@@ -75,6 +77,7 @@ export const RendererUI = {
         uiLayer?.findOne('.vpCounter')?.destroy();
         uiLayer?.findOne('.axisVpCounter')?.destroy();
         RendererUI.removeGroupPanel();
+        RendererUI.removeTargetPanel();
         uiLayer?.batchDraw();
     },
 
@@ -106,6 +109,10 @@ export const RendererUI = {
             if (action === 'setAxisVPText')      RendererUI.drawAxisVPText(data.text);
             if (action === 'showGroupPanel')     RendererUI.drawGroupPanel(data);
             if (action === 'hideGroupPanel')     RendererUI.removeGroupPanel();
+            if (action === 'showTargetPanel')    RendererUI.drawTargetPanel(data.targets);
+            if (action === 'hideTargetPanel')    RendererUI.removeTargetPanel();
+            if (action === 'setHoverFP')         RendererUI.drawHoverFP(data.hex, data.fp);
+            if (action === 'clearHoverFP')       RendererUI.removeHoverFP();
             if (action === 'flashLOS')       RendererUI.drawLOSLine(data.from, data.to, data.color);
             if (action === 'clearLOS')       RendererUI.clearLOS();
             if (action === 'flashHitPoints') RendererUI.drawHitPoints(data);
@@ -497,9 +504,38 @@ export const RendererUI = {
         uiLayer.batchDraw();
     },
 
-    // Рисует панель групп: фон + иконки по координатам из layout.
+    // Рисует панель групп: число MF сверху, фон, иконки по координатам из layout.
     drawGroupPanel(layout) {
         RendererUI.removeGroupPanel();
+        RendererUI.removeTargetPanel();   // новая группа заменяет target-панель
+        // Число MF над панелью — для MG.
+        if (layout.mf !== null && layout.mf !== undefined) {
+            const mfText = new Konva.Text({
+                x: layout.x, y: layout.y - 18,
+                width: layout.w,
+                text: `MF: ${layout.mf}`,
+                fill: 'white', fontSize: 12, fontStyle: 'bold',
+                align: 'center',
+                name: 'groupPanelMF',
+                listening: false,
+            });
+            uiLayer.add(mfText);
+            groupPanelNodes.push(mfText);
+        }
+        // Число FP над панелью — для FG.
+        if (layout.fp !== null && layout.fp !== undefined) {
+            const fpText = new Konva.Text({
+                x: layout.x, y: layout.y - 18,
+                width: layout.w,
+                text: `FP: ${layout.fp}`,
+                fill: 'white', fontSize: 12, fontStyle: 'bold',
+                align: 'center',
+                name: 'groupPanelFP',
+                listening: false,
+            });
+            uiLayer.add(fpText);
+            groupPanelNodes.push(fpText);
+        }
         // Фон панели.
         const bg = new Konva.Rect({
             x: layout.x, y: layout.y, width: layout.w, height: layout.h,
@@ -529,6 +565,148 @@ export const RendererUI = {
         for (const n of groupPanelNodes) n.destroy();
         groupPanelNodes.length = 0;
         uiLayer?.batchDraw();
+    },
+
+    // Панель целей по итогу огня: по строке на цель, слева before-иконка, справа after.
+    // Для KIA (after.kia=true) поверх after-иконки красная надпись «KIA».
+    drawTargetPanel(targets) {
+        RendererUI.removeTargetPanel();
+        RendererUI.removeGroupPanel();   // панель групп прячется — её место занимает target-панель
+
+        const PANEL_Y            = 250;
+        const PANEL_RIGHT_MARGIN = 51;
+        const PAD_X              = 10;
+        const PAD_Y              = 8;
+        const GAP_X              = 6;    // зазор между before- и after-иконками
+        const GAP_Y              = 4;    // зазор между строками
+
+        const w = PAD_X * 2 + UNIT_IMAGE_SIZE * 2 + GAP_X;
+        const h = targets.length * UNIT_IMAGE_SIZE
+               + (targets.length - 1) * GAP_Y
+               + PAD_Y * 2;
+        const stage = uiLayer.getStage();
+        const px = stage.width() - w - PANEL_RIGHT_MARGIN;
+        const py = PANEL_Y;
+
+        const bg = new Konva.Rect({
+            x: px, y: py, width: w, height: h,
+            fill: 'rgba(0,0,0,0.7)', cornerRadius: 4,
+            name: 'targetPanel',
+            listening: false,
+        });
+        uiLayer.add(bg);
+        targetPanelNodes.push(bg);
+
+        targets.forEach((t, idx) => {
+            const iy = py + PAD_Y + idx * (UNIT_IMAGE_SIZE + GAP_Y);
+            if (t.beforeImage) {
+                const beforeNode = new Konva.Image({
+                    x: px + PAD_X, y: iy,
+                    image: t.beforeImage,
+                    width: UNIT_IMAGE_SIZE, height: UNIT_IMAGE_SIZE,
+                    listening: false,
+                });
+                uiLayer.add(beforeNode);
+                targetPanelNodes.push(beforeNode);
+            }
+            const afterX = px + PAD_X + UNIT_IMAGE_SIZE + GAP_X;
+            if (t.after && t.after.image) {
+                const afterNode = new Konva.Image({
+                    x: afterX, y: iy,
+                    image: t.after.image,
+                    width: UNIT_IMAGE_SIZE, height: UNIT_IMAGE_SIZE,
+                    listening: false,
+                });
+                uiLayer.add(afterNode);
+                targetPanelNodes.push(afterNode);
+            }
+            if (t.after && t.after.kia) {
+                const kia = new Konva.Text({
+                    x: afterX, y: iy,
+                    width: UNIT_IMAGE_SIZE, height: UNIT_IMAGE_SIZE,
+                    text: 'KIA',
+                    fill: 'red', stroke: 'black', strokeWidth: 1,
+                    fontSize: 16, fontStyle: 'bold',
+                    align: 'center', verticalAlign: 'middle',
+                    listening: false,
+                });
+                uiLayer.add(kia);
+                targetPanelNodes.push(kia);
+            }
+            // Pinned-маркер поверх after-иконки (не рисуем для KIA — юнит уже уничтожен).
+            if (t.after && t.after.pinned && !t.after.kia) {
+                const pinW    = Math.round(UNIT_IMAGE_SIZE * 0.375);
+                const pinH    = Math.round(UNIT_IMAGE_SIZE * 0.208);
+                const pinFont = Math.round(UNIT_IMAGE_SIZE * 0.167);
+                const pinBg = new Konva.Rect({
+                    x: afterX, y: iy,
+                    width: pinW, height: pinH,
+                    fill: 'white',
+                    listening: false,
+                });
+                const pinTxt = new Konva.Text({
+                    x: afterX + 1, y: iy + 1,
+                    text: 'pin', fill: 'red', fontSize: pinFont, fontStyle: 'bold',
+                    listening: false,
+                });
+                uiLayer.add(pinBg, pinTxt);
+                targetPanelNodes.push(pinBg, pinTxt);
+            }
+            // Wounded-маркер поверх after-иконки (белая полоса сверху, красный "+" и слово "wound").
+            if (t.after && t.after.wounded && !t.after.kia) {
+                const stripeH    = Math.round(UNIT_IMAGE_SIZE * 0.167);
+                const stripeFont = Math.round(UNIT_IMAGE_SIZE * 0.146);
+                const crossFont  = Math.round(UNIT_IMAGE_SIZE * 0.25);
+                const wRect = new Konva.Rect({
+                    x: afterX, y: iy,
+                    width: UNIT_IMAGE_SIZE, height: stripeH,
+                    fill: 'white',
+                    listening: false,
+                });
+                const wCross = new Konva.Text({
+                    x: afterX + 1, y: iy - 2,
+                    text: '+', fill: 'red', fontSize: crossFont, fontStyle: 'bold',
+                    listening: false,
+                });
+                const wText = new Konva.Text({
+                    x: afterX, y: iy,
+                    width: UNIT_IMAGE_SIZE, height: stripeH,
+                    text: 'wound', fill: 'red', fontSize: stripeFont, fontStyle: 'bold',
+                    align: 'center', verticalAlign: 'middle',
+                    listening: false,
+                });
+                uiLayer.add(wRect, wCross, wText);
+                targetPanelNodes.push(wRect, wCross, wText);
+            }
+        });
+        uiLayer.batchDraw();
+    },
+
+    removeTargetPanel() {
+        for (const n of targetPanelNodes) n.destroy();
+        targetPanelNodes.length = 0;
+        uiLayer?.batchDraw();
+    },
+
+    // Текст итогового FP у левого-верхнего угла hex'а (world-anchored на worldFxLayer).
+    drawHoverFP(hex, fp) {
+        RendererUI.removeHoverFP();
+        if (!worldFxLayer) return;
+        const { x, y } = hexToPixel(hex.col, hex.row);
+        hoverFPNode = new Konva.Text({
+            x: x - R, y: y - R,
+            text: String(fp),
+            fill: 'white', stroke: 'black', strokeWidth: 2, fillAfterStrokeEnabled: true,
+            fontSize: 20, fontStyle: 'bold',
+            listening: false,
+        });
+        worldFxLayer.add(hoverFPNode);
+        worldFxLayer.batchDraw();
+    },
+
+    removeHoverFP() {
+        if (hoverFPNode) { hoverFPNode.destroy(); hoverFPNode = null; }
+        worldFxLayer?.batchDraw();
     },
 
     // Счётчик Axis VP под Allied-счётчиком.
