@@ -294,3 +294,11 @@ placed on the END box the scenario is over.
 Control (A26):
 A Good Order Infantry MMC gains control of the hex or building it occupies
 without the presence of an enemy unit.
+
+
+Open Ground (hill exception):
+Any hill hex devoid of other terrain is also an Open Ground hex.
+
+
+Interdiction (Height Advantage exception):
+A unit eligible for the +1 Height Advantage TEM is not subject to Interdiction.

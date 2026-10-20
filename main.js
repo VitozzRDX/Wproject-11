@@ -209,7 +209,7 @@ async function loadScenario(name) {
 
     // 5. Пиксельные наборы + hexmap
     await initTerrainLOS(scen.pixelsUrl, scen.roadsUrl);
-    setHexMap(await scen.hexmapModule());
+    setHexMap(await scen.hexmapModule(), scen.terrainOverride);
 
     // 6. Background: карты (rotation/offset per card) + hex grid
     backgroundLayer = new Konva.Layer();

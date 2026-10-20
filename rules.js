@@ -97,19 +97,25 @@ function calcFirepower(unit, targetHex) {
     // AFPh (Advancing Fire): весь огонь идёт с половинной FP.
     if (PhaseManager.getPhase() === 'advancingFire') {
         fp = fp / 2;
-        // Assault Fire (A8.3): squad с underlined FP в пределах normal range → +1 FP, дробь вверх.
-        if (unit.underlinedFP && unit.type === 'squad' && dist <= rng) {
-            const before = fp;
-            fp = Math.ceil(fp) + 1;
-            console.log(`[AssaultFire] ${unit.id}: AFPh fp=${before} → ${fp} (+1 бонус)`);
-        }
     }
 
     if (dist > rng * 2) return 0;
-    if (dist === 0)     return fp * 3;   // Triple Point Blank Fire (same hex)
-    if (dist === 1)     return fp * 2;   // Point Blank Fire (adjacent)
-    if (dist <= rng)    return fp;
-    return fp / 2;                        // long range
+    let final;
+    if      (dist === 0)   final = fp * 3;   // Triple Point Blank Fire (same hex)
+    else if (dist === 1)   final = fp * 2;   // Point Blank Fire (adjacent)
+    else if (dist <= rng)  final = fp;
+    else                   final = fp / 2;   // long range
+
+    // Assault Fire (A8.3): squad с underlined FP в пределах normal range → +1 FP ПОСЛЕ всех
+    // модификаций (включая дистанционный множитель); дробь округляется вверх.
+    if (PhaseManager.getPhase() === 'advancingFire'
+        && unit.underlinedFP && unit.type === 'squad' && dist <= rng) {
+        const before = final;
+        final = Math.ceil(final) + 1;
+        console.log(`[AssaultFire] ${unit.id}: AFPh fp=${before} → ${final} (+1 бонус)`);
+    }
+
+    return final;
 }
 
 function calcTotalFirepower(units, targetHex) {
@@ -211,7 +217,14 @@ function _hexLine(fromHex, toHex) {
             out.push(h);                                                           // строго внутри hex
         }
     }
-    return out;
+    // Дедуп повторов — spine-pick может возвращать один hex многократно.
+    const seen = new Set();
+    return out.filter(h => {
+        const k = `${h.col},${h.row}`;
+        if (seen.has(k)) return false;
+        seen.add(k);
+        return true;
+    });
 }
 
 // Отражает центр hex'а через линию from-to → возвращает hex по зеркальной точке.
@@ -1200,14 +1213,18 @@ function mustRout(unit, units, orchardInSeason = false) {
 
     // (b) в Open Ground + Good Order enemy в normal range + LoS
     const terrain = terrainAt(unit.hex.col, unit.hex.row);
-    // crestLine — только маркер границы, укрытия не даёт; гекс только с ним — всё равно Open Ground.
-    const openGround = terrain.every(t => t === 'crestLine');
+    // Open Ground: пустой террейн; crestLine — маркер границы, укрытия не даёт;
+    // hill без другого террейна — тоже Open Ground (ASL: hill hex devoid of other terrain).
+    const noCoverTypes = new Set(['crestLine', 'hill', 'dirtRoad', 'pavedRoad']);
+    const openGround = terrain.every(t => noCoverTypes.has(t));
     if (openGround) {
         for (const other of Object.values(units)) {
             if (other.side === unit.side) continue;
             if (!_isGoodOrderShooter(other)) continue;
             if (hexDistance(other.hex, unit.hex) > other.range) continue;
             if (!checkLOS(other.hex, unit.hex, orchardInSeason)) continue;
+            // HA: broken выше стрелка → не subject к Interdiction, значит и не mustRout по нему.
+            if (calcHeightAdvantage([other.hex], unit.hex, [unit]) > 0) continue;
             return true;
         }
     }

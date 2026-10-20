@@ -181,6 +181,16 @@ export const scenarios = {
     gameLength: 14,          // 7 full turns = 14 player turns
     playArea: { col: [21, 49], row: [1, 11] },   // границы; выход — элиминация юнита
 
+    // Сценарный override базовой карты — для гексов, где печать карты отличается от hexmapBaked.
+    terrainOverride: {
+        "40-4": ["orchard"],
+        "41-3": ["orchard"],
+        "42-3": ["orchard"],
+        "42-4": ["orchard"],
+        "43-2": ["orchard"],
+        "43-4": ["orchard"],
+    },
+
     // Правило VP при эллиминации (вызывается движком).
     // Возвращает {allied: N, axis: M} — сколько очков начислить каждой стороне.
     vpOnElimination(unit, context, fullTurn, defaultVP) {

@@ -230,8 +230,13 @@ const handlers = {
                 }
             }
 
-            // копируем текущую MG в original_group ДО очистки
-            State.original_group = [...State.movementGroup];
+            // копируем текущую MG в original_group ДО очистки, но только если текущая MG
+            // не является подмножеством прежней original_group — иначе потеряем контекст
+            // большой стопки для будущих split-ходов.
+            if (State.original_group.length === 0
+                || !State.movementGroup.every(id => State.original_group.includes(id))) {
+                State.original_group = [...State.movementGroup];
+            }
             for (const unitId of State.movementGroup) {
                 _setInMovementGroup(unitId, false);
             }
