@@ -419,7 +419,7 @@ const handlers = {
         );
         UIState.showCCPanel(units);
         UIState.addButton('ConfirmCCAttack', { x: 20, y: 100, label: 'ConfirmCCAttack' });
-        UIState.addButton('StartDefenderCC', { x: 20, y: 140, label: 'StartDefenderCC' });
+        UIState.fadeButton('ConfirmCCAttack');   // активна только когда есть пара attacker+target в пулах
         State.ambushSide = null;
         State.ccAmbushRound = null;
         // Ambush eligible: woods/building hex, и никто из юнитов не в Melee (Melee = reinforcing, не ambush).
@@ -437,12 +437,10 @@ const handlers = {
         console.log(`[Ambush] result: ${State.ambushSide ?? 'none'}`);
         UIState.removeButton('RollAmbush');
         if (!State.ambushSide) return;   // нет успеха → обычный флоу
-        // Ambush-режим: убираем StartDefenderCC (раунды сам переключит ResolveCC).
-        UIState.removeButton('StartDefenderCC');
         State.ccAmbushRound = 'round 1';
         State.ccDefenderDeclaring = (State.ambushSide === 'defender');
         State.ccSelectedIds = [];
-        UIState.addButton('ResolveCC', { x: 20, y: 180, label: 'ResolveCC' });
+        UIState.addButton('StartCC', { x: 20, y: 180, label: 'StartCC' });
         console.log(`[Ambush] ${State.ambushSide} declares first`);
     },
 
@@ -463,6 +461,7 @@ const handlers = {
         State.ccSelectedIds.push(uid);
         State.setUnit(uid, 'ccSelected', true);
         UIState.setCCPanelSelect(_allCurrentSelected());
+        _refreshCCConfirmButton();
     },
 
     ConfirmCCAttack: () => {
@@ -477,17 +476,41 @@ const handlers = {
         UIState.setCCPanelSelect([]);
         console.log('[CCPh] atk:', State.ccAttackerList.map(a => `[${a.attackers}]→[${a.targets}]`).join(' | '),
                     '| def:', State.ccDefenderList.map(a => `[${a.attackers}]→[${a.targets}]`).join(' | '));
+        _refreshCCConfirmButton();
+        // Auto-swap в defender declare только в non-ambush, когда все attacker-юниты задействованы.
+        if (!State.ccAmbushRound) {
+            const attackersInHex = Object.values(State.units).filter(u =>
+                u.category === 'infantry' && u.side === 'attacker'
+                && isSameHex(u.hex, State.currentCCHex)
+            );
+            const usedAttackers = new Set(State.ccAttackerList.flatMap(a => a.attackers));
+            if (attackersInHex.every(u => usedAttackers.has(u.id))) {
+                State.ccDefenderDeclaring = true;
+                State.ccSelectedIds = [];                     // defender declare — свежий tracking
+                UIState.removeButton('ConfirmCCAttack');
+                UIState.addButton('ConfirmCCDefend', { x: 20, y: 100, label: 'ConfirmCCDefend' });
+                UIState.fadeButton('ConfirmCCDefend');
+                UIState.addButton('StartCC',         { x: 20, y: 140, label: 'StartCC' });
+                console.log('[CCPh] all attackers declared → defender declares');
+            }
+        }
     },
 
-    StartDefenderCC: () => {
-        State.ccDefenderDeclaring = true;
-        State.ccSelectedIds = [];   // новая declare-фаза → новое tracking
-        UIState.removeButton('StartDefenderCC');
-        UIState.addButton('ResolveCC', { x: 20, y: 180, label: 'ResolveCC' });
-        console.log('[CCPh] defender declares');
+    ConfirmCCDefend: () => {
+        const confirmed = _confirmAttackFromPools(
+            State.ccDefenderAttackers, State.ccDefenderDefenders, State.ccDefenderList
+        );
+        if (!confirmed) return;
+        for (const uid of [...confirmed.attackers, ...confirmed.targets]) {
+            State.setUnit(uid, 'ccSelected', false);
+        }
+        UIState.setCCPanelSelect([]);
+        console.log('[CCPh] def confirm:',
+            State.ccDefenderList.map(a => `[${a.attackers}]→[${a.targets}]`).join(' | '));
+        _refreshCCConfirmButton();
     },
 
-    ResolveCC: async () => {
+    StartCC: async () => {
         if (State.ccAmbushRound) await _resolveAmbushRound();
         else                     await _result_of_CC_in_hex();
     },
@@ -986,9 +1009,9 @@ const handlers = {
             UIState.setCCHexes([]);
             UIState.hideCCPanel();
             UIState.removeButton('ConfirmCCAttack');
-            UIState.removeButton('StartDefenderCC');
+            UIState.removeButton('ConfirmCCDefend');
             UIState.removeButton('RollAmbush');
-            UIState.removeButton('ResolveCC');
+            UIState.removeButton('StartCC');
             // 3.9 Turn Record: attacker ↔ defender.
             for (const u of Object.values(State.units)) {
                 State.setUnit(u.id, 'side', u.side === 'attacker' ? 'defender' : 'attacker');
@@ -1439,6 +1462,16 @@ function _allCurrentSelected() {
         : [...State.ccAttackerAttackers, ...State.ccAttackerDefenders];
 }
 
+// Обновить активность текущей confirm-кнопки CCPh по тому, есть ли пара (attackers + targets) в соответствующих пулах.
+function _refreshCCConfirmButton() {
+    const label = UIState.buttons && UIState.buttons['ConfirmCCDefend'] ? 'ConfirmCCDefend' : 'ConfirmCCAttack';
+    const hasPair = State.ccDefenderDeclaring
+        ? (State.ccDefenderAttackers.length > 0 && State.ccDefenderDefenders.length > 0)
+        : (State.ccAttackerAttackers.length > 0 && State.ccAttackerDefenders.length > 0);
+    if (hasPair) UIState.redrawButton(label);
+    else         UIState.fadeButton(label);
+}
+
 // Фиксирует одну CC-атаку: копирует attackers/targets в list, сбрасывает исходные пулы.
 // Возвращает подтверждённый объект (или null если пулы пусты).
 // FP юнита для CC: leader = 1, иначе firepower.
@@ -1569,8 +1602,8 @@ function _finalizeCCHex() {
     State.ccAmbushRound = null;
     UIState.hideCCPanel();
     UIState.removeButton('ConfirmCCAttack');
-    UIState.removeButton('StartDefenderCC');
-    UIState.removeButton('ResolveCC');
+    UIState.removeButton('ConfirmCCDefend');
+    UIState.removeButton('StartCC');
     UIState.removeButton('RollAmbush');
 }
 

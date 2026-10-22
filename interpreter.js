@@ -456,23 +456,23 @@ const RULES = [
         }],
         name: 'ConfirmCCAttack'
     },
-    // CCPh: кнопка StartDefenderCC → переключаем declare-фазу на defender.
+    // CCPh: кнопка ConfirmCCDefend → фиксировать выбор как одну defender-атаку.
     {
         requiresAny: [{
             phaseIsCC:  ()  => PhaseManager.getPhase() === 'closeCombat',
             leftClick:  ctx => ctx.button !== 2,
-            clickedBtn: ctx => ctx.buttonLabel === 'StartDefenderCC',
+            clickedBtn: ctx => ctx.buttonLabel === 'ConfirmCCDefend',
         }],
-        name: 'StartDefenderCC'
+        name: 'ConfirmCCDefend'
     },
-    // CCPh: кнопка ResolveCC → расчёт всех атак + apply simultaneous.
+    // CCPh: кнопка StartCC → расчёт всех атак + apply simultaneous (unified non-ambush и ambush).
     {
         requiresAny: [{
             phaseIsCC:  ()  => PhaseManager.getPhase() === 'closeCombat',
             leftClick:  ctx => ctx.button !== 2,
-            clickedBtn: ctx => ctx.buttonLabel === 'ResolveCC',
+            clickedBtn: ctx => ctx.buttonLabel === 'StartCC',
         }],
-        name: 'ResolveCC'
+        name: 'StartCC'
     },
     // CCPh: кнопка RollAmbush → проверка засады перед объявлением атак.
     {

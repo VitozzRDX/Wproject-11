@@ -1351,6 +1351,8 @@ function isAdjacent(fromHex, targetHex) {
 export function checkOverstack(targetHex, movementGroup, units) {
     let squadCount  = 0;
     let leaderCount = 0;
+    // Лимит стека считается per-side (ASL): враждебные юниты в hex'е не влияют на свой лимит.
+    const movingSide = movementGroup.length ? units[movementGroup[0]].side : null;
 
     const countUnit = (u) => {
         if (u.type === 'leader') {
@@ -1363,6 +1365,7 @@ export function checkOverstack(targetHex, movementGroup, units) {
 
     Object.values(units).forEach(u => {
         if (movementGroup.includes(u.id)) return;
+        if (movingSide && u.side !== movingSide) return;   // чужая сторона не считается
         const inTargetHex = u.hex && isSameHex(u.hex, targetHex);
         if (!inTargetHex) return;
         countUnit(u);
