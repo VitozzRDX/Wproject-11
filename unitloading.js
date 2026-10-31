@@ -168,6 +168,14 @@ export function preloadAllTemplateImages() {
     return Promise.all(imagePaths.map(path => loadImage(path)));
 }
 
+// Прогреть кэш UI-картинок (бэйджи сторон и т.п.). Один раз на старте.
+export function preloadUIImages() {
+    return Promise.all([
+        loadImage('./graf/turnphaseallied.gif'),
+        loadImage('./graf/turnphaseaxis.gif'),
+    ]);
+}
+
 // ---------------------------------------------------------------------------
 // Создание одного юнита
 // ---------------------------------------------------------------------------

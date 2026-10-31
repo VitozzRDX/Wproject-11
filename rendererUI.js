@@ -7,6 +7,38 @@ let uiLayer;
 let worldFxLayer;
 let ccLayer;                        // world-anchored, ПОД юнитами — только для CC-хекс подсветки
 const losLines = [];
+// Отображаемые тексты кнопок по их label-ключу. Используется в drawButton как источник
+// текста по умолчанию (можно переопределить через def.text).
+const BUTTON_TEXT = {
+    NextPhase:       'NEXT PHASE',
+    RollAmbush:      'Roll Ambush',
+    StartCC:         'Roll Close Combat !',
+    Confirm:         'Confirm',
+    ConfirmCCDefend: 'Confirm',
+};
+
+// Геометрия VS-панелей CC (единая точка для drawCCAttackPanels и getCCConfirmButtonPos).
+const CC_PANEL_X        = 10;     // выравнено с планкой «choose Close Combatants»
+const CC_PANEL_Y        = 62;     // слот 0 — верхняя планка, слоты 1+ — VS-панели (общая сетка)
+const CC_PANEL_PAD_X    = 10;
+const CC_PANEL_PAD_Y    = 8;
+const CC_PANEL_GAP      = 4;
+const CC_PANEL_GAP_V    = 6;
+const CC_PANEL_VS_W     = 30;
+const CC_PANEL_OFFSET   = 3;
+const CC_CONFIRM_GAP    = 8;
+const CC_PANEL_HALF_W  = UNIT_IMAGE_SIZE * 3 + CC_PANEL_GAP * 2;
+const CC_PANEL_TOTAL_W = CC_PANEL_HALF_W * 2 + CC_PANEL_VS_W + CC_PANEL_PAD_X * 2;
+const CC_PANEL_H       = UNIT_IMAGE_SIZE + CC_PANEL_PAD_Y * 2;
+const CC_PANEL_STEP_Y  = CC_PANEL_H + CC_PANEL_GAP_V;
+const CC_CONFIRM_X     = CC_PANEL_X + CC_PANEL_TOTAL_W + CC_CONFIRM_GAP;
+
+// Позиция Confirm-кнопки — справа от текущей активной VS-панели (последней).
+// Позиция Confirm-кнопки — справа от панели в указанном слоте.
+export function getCCConfirmButtonPos(slot) {
+    return { x: CC_CONFIRM_X, y: CC_PANEL_Y + slot * CC_PANEL_STEP_Y };
+}
+
 const residualNodes = new Map();   // hexKey → Konva.Group для residual FP счётчиков
 const routLegalNodes = [];         // Konva-ноды подсветки легальных rout-hex'ов (green)
 const routShelterNodes = [];       // Konva-ноды подсветки потенциальных укрытий (blue)
@@ -15,6 +47,7 @@ const ccHexNodes       = [];       // Konva-ноды подсветки CC-хе�
 const setupBoundsNodes = [];       // Konva-ноды подсветки setup-зоны (зелёная заливка)
 const groupPanelNodes = [];        // Konva-ноды панели групп (фон + иконки); чистим при redraw и hide
 const targetPanelNodes = [];       // Konva-ноды панели целей по итогу огня
+const ccAttackPanelsNodes = [];    // Konva-ноды горизонтальных VS-панелей CC-атак
 let hoverFPNode = null;            // Konva.Text итогового FP у hex'а-цели при hover
 const smokeNodes       = [];       // Konva-группы анимированного дыма (нужны для cleanAll + save/load)
 
@@ -78,6 +111,8 @@ export const RendererUI = {
         uiLayer?.findOne('.axisVpCounter')?.destroy();
         RendererUI.removeGroupPanel();
         RendererUI.removeTargetPanel();
+        RendererUI.removeCCAttackPanels();
+        RendererUI.removeActiveSidePlank();
         uiLayer?.batchDraw();
     },
 
@@ -111,8 +146,15 @@ export const RendererUI = {
             if (action === 'hideGroupPanel')     RendererUI.removeGroupPanel();
             if (action === 'showTargetPanel')    RendererUI.drawTargetPanel(data.targets);
             if (action === 'hideTargetPanel')    RendererUI.removeTargetPanel();
+            if (action === 'centerOnHex')        RendererUI.centerCameraOnHex(data.hex);
             if (action === 'setHoverFP')         RendererUI.drawHoverFP(data.hex, data.fp);
             if (action === 'clearHoverFP')       RendererUI.removeHoverFP();
+            if (action === 'showCCAttackPanels') RendererUI.drawCCAttackPanels(data.panels);
+            if (action === 'hideCCAttackPanels') RendererUI.removeCCAttackPanels();
+            if (action === 'showActiveSidePlank') RendererUI.drawActiveSidePlank(data);
+            if (action === 'hideActiveSidePlank') RendererUI.removeActiveSidePlank();
+            if (action === 'showAmbushInfoPlank') RendererUI.drawAmbushInfoPlank(data);
+            if (action === 'hideAmbushInfoPlank') RendererUI.removeAmbushInfoPlank();
             if (action === 'flashLOS')       RendererUI.drawLOSLine(data.from, data.to, data.color);
             if (action === 'clearLOS')       RendererUI.clearLOS();
             if (action === 'flashHitPoints') RendererUI.drawHitPoints(data);
@@ -349,8 +391,8 @@ export const RendererUI = {
         const gap = 4;
         const totalH = units.length * (uh + gap) - gap;
         const stage = uiLayer.getStage();
-        const panelX = stage.width() - uw - 24;
-        const panelY = 60;
+        const panelX = 1360;   // 1383 - 23 (половина ширины иконки); центр панели совпадёт с центром крутилки
+        const panelY = 170;
 
         const panel = new Konva.Group({ x: panelX, y: panelY, name: 'ccPanel' });
         panel.add(new Konva.Rect({
@@ -493,7 +535,7 @@ export const RendererUI = {
         uiLayer?.findOne('.vpCounter')?.destroy();
         const stage = uiLayer.getStage();
         const t = new Konva.Text({
-            x: stage.width() - 162 + 10, y: 205,
+            x: stage.width() / 2 - 220, y: 2,   // чуть левее центра, Allied — слева от Axis
             width: 100,
             text, fill: 'white', fontSize: 12, fontStyle: 'bold',
             align: 'center',
@@ -688,6 +730,194 @@ export const RendererUI = {
         uiLayer?.batchDraw();
     },
 
+    // Сдвигает stage так, чтобы hex оказался в центре viewport'а. uiLayer синхронизируется.
+    centerCameraOnHex(hex) {
+        const stage = uiLayer.getStage();
+        const { x: wx, y: wy } = hexToPixel(hex.col, hex.row);
+        stage.x(stage.width() / 2 - wx);
+        stage.y(stage.height() / 2 - wy);
+        uiLayer.x(-stage.x());
+        uiLayer.y(-stage.y());
+        stage.batchDraw();
+    },
+
+    // Горизонтальные VS-панели CC-атак: по одной строке на подтверждённую или in-progress атаку.
+    // 3 слота слева + VS + 3 слота справа. Если юнитов >3 на сторону — накладываем с постоянным offset.
+    drawCCAttackPanels(panels) {
+        RendererUI.removeCCAttackPanels();
+
+        const drawSide = (items, baseX, py) => {
+            items.forEach((it, i) => {
+                if (!it.image) return;
+                const slotIdx     = Math.min(i, 2);
+                const extraOffset = i > 2 ? (i - 2) * CC_PANEL_OFFSET : 0;
+                const ix = baseX + slotIdx * (UNIT_IMAGE_SIZE + CC_PANEL_GAP) + extraOffset;
+                const iy = py + CC_PANEL_PAD_Y;
+                const node = new Konva.Image({
+                    x: ix, y: iy, image: it.image,
+                    width: UNIT_IMAGE_SIZE, height: UNIT_IMAGE_SIZE,
+                    listening: false,
+                });
+                uiLayer.add(node);
+                ccAttackPanelsNodes.push(node);
+                if (it.kia) {
+                    const kia = new Konva.Text({
+                        x: ix, y: iy,
+                        width: UNIT_IMAGE_SIZE, height: UNIT_IMAGE_SIZE,
+                        text: 'KIA', fill: 'red', stroke: 'black', strokeWidth: 1,
+                        fontSize: 16, fontStyle: 'bold',
+                        align: 'center', verticalAlign: 'middle',
+                        listening: false,
+                    });
+                    uiLayer.add(kia);
+                    ccAttackPanelsNodes.push(kia);
+                }
+            });
+        };
+
+        panels.forEach(p => {
+            const px = CC_PANEL_X;
+            const py = CC_PANEL_Y + p.slot * CC_PANEL_STEP_Y;
+
+            const bg = new Konva.Rect({
+                x: px, y: py, width: CC_PANEL_TOTAL_W, height: CC_PANEL_H,
+                fill: 'rgba(0,0,0,0.7)', cornerRadius: 4,
+                name: 'ccAttackPanel', listening: false,
+            });
+            uiLayer.add(bg);
+            ccAttackPanelsNodes.push(bg);
+
+            const vs = new Konva.Text({
+                x: px + CC_PANEL_PAD_X + CC_PANEL_HALF_W, y: py,
+                width: CC_PANEL_VS_W, height: CC_PANEL_H,
+                text: 'VS', fill: 'red', fontSize: 18, fontStyle: 'bold',
+                align: 'center', verticalAlign: 'middle',
+                listening: false,
+            });
+            uiLayer.add(vs);
+            ccAttackPanelsNodes.push(vs);
+
+            drawSide(p.left,  px + CC_PANEL_PAD_X,                                      py);
+            drawSide(p.right, px + CC_PANEL_PAD_X + CC_PANEL_HALF_W + CC_PANEL_VS_W,    py);
+        });
+        uiLayer.batchDraw();
+    },
+
+    removeCCAttackPanels() {
+        for (const n of ccAttackPanelsNodes) n.destroy();
+        ccAttackPanelsNodes.length = 0;
+        uiLayer?.batchDraw();
+    },
+
+    // Планка «[side] choose Close Combatants :» вместо RollAmbush (ambush без успеха).
+    drawActiveSidePlank({ slot = 0, badge }) {
+        const x = CC_PANEL_X;
+        const y = CC_PANEL_Y + slot * CC_PANEL_STEP_Y;          // общая сетка слотов с VS-панелями
+        const H    = CC_PANEL_H;              // та же высота что VS-панели
+        const PAD  = CC_PANEL_PAD_X;
+        const ICON = UNIT_IMAGE_SIZE;
+        const W    = 280;                     // ширина — подогнано под текст
+
+        const bg = new Konva.Rect({
+            x, y, width: W, height: H,
+            fill: 'rgba(255,255,255,0.7)', cornerRadius: 4,
+            name: 'activeSidePlank', listening: false,
+        });
+        uiLayer.add(bg);
+
+        const src = badge === 'axis' ? './graf/turnphaseaxis.gif' : './graf/turnphaseallied.gif';
+        const img = getImage(src);            // из кэша (уже загружено для крутилки)
+        if (img) {
+            const scale = Math.min(ICON / img.width, ICON / img.height);   // уместить в ICON x ICON с сохранением пропорций
+            const h = img.height * scale;
+            const icon = new Konva.Image({
+                x: x + PAD, y: y + (H - h) / 2,                            // центровка по реальной высоте
+                image: img,
+                scaleX: scale, scaleY: scale,
+                name: 'activeSidePlank', listening: false,
+            });
+            uiLayer.add(icon);
+        }
+
+        const txt = new Konva.Text({
+            x: x + PAD + ICON + 8, y,
+            height: H,
+            text: 'choose Close Combatants :',
+            fill: 'black', fontSize: 14, fontStyle: 'bold',
+            verticalAlign: 'middle',
+            name: 'activeSidePlank', listening: false,
+        });
+        uiLayer.add(txt);
+        uiLayer.batchDraw();
+    },
+
+    removeActiveSidePlank() {
+        uiLayer?.find('.activeSidePlank').forEach(n => n.destroy());
+        uiLayer?.batchDraw();
+    },
+
+    // Инфо-планка: 1 секунду после успешного Ambush, пишет "Ambush ! declares first".
+    // Чёрный фон с прозрачностью, "Ambush !" красным. Выводится по центру экрана.
+    drawAmbushInfoPlank({ badge }) {
+        const H    = CC_PANEL_H;
+        const PAD  = CC_PANEL_PAD_X;
+        const ICON = UNIT_IMAGE_SIZE;
+        const W    = 280;
+        const x = (window.innerWidth - W) / 2;   // по X — центр экрана
+        const y = CC_PANEL_Y;                    // по Y — вровень с choose-планкой (слот 0)
+
+        const bg = new Konva.Rect({
+            x, y, width: W, height: H,
+            fill: 'rgba(0,0,0,0.7)', cornerRadius: 4,       // чёрный с прозрачностью
+            name: 'ambushInfoPlank', listening: false,
+        });
+        uiLayer.add(bg);
+
+        // "Ambush !" красным — слева
+        const txtRed = new Konva.Text({
+            x: x + PAD, y,
+            height: H,
+            text: 'Ambush !',
+            fill: '#e03030', fontSize: 14, fontStyle: 'bold',
+            verticalAlign: 'middle',
+            name: 'ambushInfoPlank', listening: false,
+        });
+        uiLayer.add(txtRed);
+
+        const src = badge === 'axis' ? './graf/turnphaseaxis.gif' : './graf/turnphaseallied.gif';
+        const img = getImage(src);
+        const iconX = x + PAD + txtRed.width() + 8;   // бейдж после "Ambush !"
+        if (img) {
+            const scale = Math.min(ICON / img.width, ICON / img.height);
+            const h = img.height * scale;
+            const icon = new Konva.Image({
+                x: iconX, y: y + (H - h) / 2,
+                image: img,
+                scaleX: scale, scaleY: scale,
+                name: 'ambushInfoPlank', listening: false,
+            });
+            uiLayer.add(icon);
+        }
+
+        // " declares first" белым — после бейджа
+        const txtWhite = new Konva.Text({
+            x: iconX + ICON + 8, y,
+            height: H,
+            text: ' declares first',
+            fill: 'white', fontSize: 14, fontStyle: 'bold',
+            verticalAlign: 'middle',
+            name: 'ambushInfoPlank', listening: false,
+        });
+        uiLayer.add(txtWhite);
+
+        uiLayer.batchDraw();
+    },
+
+    removeAmbushInfoPlank() {
+        uiLayer?.find('.ambushInfoPlank').forEach(n => n.destroy());
+        uiLayer?.batchDraw();
+    },
+
     // Текст итогового FP у левого-верхнего угла hex'а (world-anchored на worldFxLayer).
     drawHoverFP(hex, fp) {
         RendererUI.removeHoverFP();
@@ -714,7 +944,7 @@ export const RendererUI = {
         uiLayer?.findOne('.axisVpCounter')?.destroy();
         const stage = uiLayer.getStage();
         const t = new Konva.Text({
-            x: stage.width() - 162 + 10, y: 225,
+            x: stage.width() / 2 - 110, y: 2,   // сразу справа от Allied, всё ещё левее центра
             width: 100,
             text, fill: 'white', fontSize: 12, fontStyle: 'bold',
             align: 'center',
@@ -730,8 +960,8 @@ export const RendererUI = {
         uiLayer?.findOne('.hillCounter')?.destroy();
         const stage = uiLayer.getStage();
         const t = new Konva.Text({
-            x: stage.width() - 162 + 10, y: 185,
-            width: 100,
+            x: stage.width() / 2 + 50, y: 2,    // центр блока на center+170, симметрично Allied (center-170); сдвинут влево т.к. width вырос
+            width: 240,                          // хватит на "Hill Control : AXIS [N] / ALLY [N]" в одну строку
             text, fill: 'white', fontSize: 12, fontStyle: 'bold',
             align: 'center',
             name: 'hillCounter',
@@ -802,17 +1032,24 @@ export const RendererUI = {
         worldFxLayer.batchDraw();
     },
 
-    drawButton({ x, y, label }) {
+    drawButton({ x, y, label, text }) {
         RendererUI.removeButton(label);
         const group = new Konva.Group({ x, y, name: `btn-${label}` });
-        group.setAttr('buttonLabel', label);
+        group.setAttr('buttonLabel', label);                           // идентификатор для interpreter
         const rect  = new Konva.Rect({
             width: 120, height: 36, fill: '#333', cornerRadius: 4,
             stroke: 'white', strokeWidth: 1,
         });
-        const text  = new Konva.Text({ text: label, fill: '#fff',
-                        width: 120, height: 36, align: 'center', verticalAlign: 'middle' });
-        group.add(rect, text);
+        let displayText;
+        if (text !== undefined && text !== null)      displayText = text;                 // text передан вызывающим — показываем его
+        else if (BUTTON_TEXT[label] !== undefined)    displayText = BUTTON_TEXT[label];   // есть запись в таблице — показываем её
+        else                                          displayText = label;                // ничего нет — показываем сам label (имя кнопки)
+        const txt = new Konva.Text({
+            text: displayText,
+            fill: '#fff',
+            width: 120, height: 36, align: 'center', verticalAlign: 'middle',
+        });
+        group.add(rect, txt);
 
         // Анимация нажатия: сжатие на 4% + сдвиг вниз.
         group.on('mousedown', () => {
@@ -854,6 +1091,9 @@ export const RendererUI = {
             name: `img-${name}`,
         });
         uiLayer.add(node);
+        if (name === 'turnphase') {
+            console.log(`[turnphase] center = (${node.x()}, ${node.y()}), img ${img.width}x${img.height}`);
+        }
         // Опциональный многоугольник поверх картинки — например кантик вокруг круглой гифки.
         // overlayPolygon: { sides, radius, rotation?, stroke, strokeWidth }
         if (overlayPolygon) {

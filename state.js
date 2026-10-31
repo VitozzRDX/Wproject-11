@@ -31,8 +31,11 @@ export const State = {
     ccDefenderDefenders: [],           // pool: enemy targets (defender declare)
     ccDefenderList: [],                // подтверждённые атаки defender-стороны
     ccDefenderDeclaring: false,        // true когда StartDefenderCC нажат
+    ccHexParticipants: null,           // id-шки пехотинцев в hex'е на момент SelectCCHex (для before-снимка)
+    ccBeforeSnap: null,                // массив {id, image} снимков иконок до резолва CC — для панели результатов
     ambushSide: null,                  // 'attacker' | 'defender' | null — сторона получившая ambush
     ccAmbushRound: null,               // 'round 1' | 'round 2' | null — раунд ambush-резолва
+    ambushPending: false,             // true если ambush-резолв в процессе (т.е. ещё не Confirm'нут)
     rallySide: null,                   // 'attacker' | 'defender' | null — чья сейчас полу-фаза RPh
     rallySubPhase: null,               // 'recovery' | 'transfer' | null — текущая под-фаза RPh
     transferHex: null,                 // hex с открытой transfer-панелью (RPh)
@@ -54,6 +57,7 @@ export const State = {
     axisVP: 0,                         // накопленные Axis VP (убитые юниты по правилу сценария)
     axisVpTarget: null,                // VP-порог Оси; ставит только сценарий
     lastGroupInteracted: null,         // 'mg' | 'fg' | 'targets' | null — что показывать в правой панели
+    deadUnitImages: {},                // {id: imageRef} — снимки иконок на момент смерти; для панелей (CC, target) чтобы рисовать KIA после _remove_unit
     setupDiceRolled: false,            // true если dice-roll уже выполнен для текущей стороны
     uiLayer: null,                     // ссылка на uiLayer — нужна setupPhase для перемещения нод между слоями
 

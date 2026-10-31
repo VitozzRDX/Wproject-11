@@ -15,10 +15,15 @@ let _lastHit = null;
 export function getLastHit() { return _lastHit; }
 export function setLastHit(v) { _lastHit = v; }
 
-export async function initTerrainLOS(pixelsUrl = './terrainPixels.json', roadsUrl = './roadPixels.json') {
-    const [data, roadData] = await Promise.all([
+export async function initTerrainLOS(
+    pixelsUrl      = './terrainPixels.json',
+    roadsUrl       = './roadPixels.json',
+    woodsInsideUrl = './woodsInsidePixels.json',
+) {
+    const [data, roadData, woodsInsideData] = await Promise.all([
         fetch(pixelsUrl).then(r => r.json()),
         fetch(roadsUrl).then(r => r.json()).catch(() => ({})),
+        fetch(woodsInsideUrl).then(r => r.json()).catch(() => ({})),
     ]);
     // Чистим предыдущие данные — при перезагрузке сценария carry-over не нужен.
     for (const k of Object.keys(cards)) delete cards[k];
@@ -39,6 +44,18 @@ export async function initTerrainLOS(pixelsUrl = './terrainPixels.json', roadsUr
     }
     // Мержим дороги (roadPixels.json) в те же карты как отдельный тип 'roads'
     for (const [cardName, cardData] of Object.entries(roadData)) {
+        const card = cards[cardName];
+        if (!card) continue;
+        for (const [key, val] of Object.entries(cardData)) {
+            if (key === 'xOffset' || key === 'yOffset' || key === 'rotation') continue;
+            const s = new Set();
+            for (const [x, y] of val) s.add(`${x},${y}`);
+            card.sets[key] = s;
+        }
+    }
+    // Мержим внутренние пиксели замкнутых forest-контуров (woodsInsidePixels.json)
+    // как тип 'woodsInside' — используется в checkLOS наравне с 'woods'.
+    for (const [cardName, cardData] of Object.entries(woodsInsideData)) {
         const card = cards[cardName];
         if (!card) continue;
         for (const [key, val] of Object.entries(cardData)) {

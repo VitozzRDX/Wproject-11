@@ -81,7 +81,7 @@ async function drawCardVisuals(layer, cardVisuals) {
             group.add(new Konva.Image({ image: img, x: 0, y: 0 }));
         }
         // Оверлеи контуров террейнов — скрыты по умолчанию, вращаются с картой
-        const overlayGroup = new Konva.Group({ visible: false });
+        const overlayGroup = new Konva.Group({ visible: false, name: 'terrainContours' });
         for (const src of card.overlayImages ?? []) {
             const img = await loadImage(src);
             overlayGroup.add(new Konva.Image({ image: img, x: 0, y: 0, listening: false }));
@@ -153,7 +153,7 @@ function _initHillCounter(scen) {
         if (side === 'axis') ax++;
         else if (side === 'allied') al++;
     }
-    setTimeout(() => UIState.setHillControlText(`Hill: Ax ${ax} / Al ${al}`), 100);
+    setTimeout(() => UIState.setHillControlText(`Hill Control : AXIS [${ax}] / ALLY [${al}]`), 100);
 }
 
 export function refreshSideBadge() {
@@ -230,6 +230,7 @@ async function loadScenario(name) {
 
     // Контроль гексов (A26): берём пред-посчитанный словарь из сценария.
     State.hexControl = scen.hexControl ? { ...scen.hexControl } : {};
+    State.deadUnitImages = {};   // новый сценарий — очистить снимки убитых из прошлой игры
     _initHillCounter(scen);
     // UI-счётчик VP появляется только когда сценарий поставит цель
     // (происходит в setupPhase/applyDiceRoll или напрямую, если сценарий без ролла).
@@ -250,7 +251,7 @@ async function loadScenario(name) {
     // 8. Стандартные UI: кнопки + крутилка
     // NextPhase в фазе setup не показываем — добавляется в EndSetupSide после последней стороны.
     if (!scen.setup) {
-        UIState.addButton('NextPhase', { x: 10, y: 10, label: 'NextPhase' });
+        UIState.addButton('NextPhase', { x: 10, y: 10, label: 'NextPhase', text: 'NEXT PHASE' });
         if (scen.gameLength) UIState.setTurnText(`TURN 1 / ${Math.ceil(scen.gameLength / 2)}`);
     }
     UIState.addButton('Save',      { x: 160, y: 10, label: 'Save' });
@@ -326,6 +327,18 @@ async function init() {
     });
     uiLayer.add(topBar);
     topBar.moveToBottom();
+
+    // Чёрная полоска высотой 18 px поверх topBar — под кнопками и надписями
+    // (добавлена после topBar и без moveToBottom → лежит выше него, но все кнопки/тексты рисуются позже и остаются сверху).
+    const topStrip = new Konva.Rect({
+        x: 0, y: 0,
+        width: window.innerWidth,
+        height: 18,
+        fill: 'black',
+        listening: false,
+        name: 'topStrip',
+    });
+    uiLayer.add(topStrip);
 
     // --- DEBUG tagging mode ---
     // F — toggle; в режиме клики собирают hex-лейблы в Set (повторный клик = убрать)
@@ -453,6 +466,15 @@ async function init() {
     };
     let _overlayLayer = null;
 
+    function _toggleTerrainContours() {
+        const groups = stage.find('.terrainContours');
+        if (!groups.length) { console.log('[contours] not loaded'); return; }
+        const nowVisible = groups[0].visible();
+        for (const g of groups) g.visible(!nowVisible);
+        stage.batchDraw();
+        console.log(`[contours] ${!nowVisible ? 'ON' : 'OFF'}`);
+    }
+
     function _toggleTerrainOverlay() {
         if (_overlayLayer) {
             _overlayLayer.destroy();
@@ -519,6 +541,10 @@ async function init() {
             _toggleTerrainOverlay();
             return;
         }
+        if (e.key === 'O' || e.key === 'o') {
+            _toggleTerrainContours();
+            return;
+        }
         interpreter.interpretKeyEvent(e);
     });
 
@@ -547,7 +573,10 @@ async function init() {
 
     // Предзагрузка картинок всех TEMPLATES в кэш unitloading. После этого
     // getImage/loadImage по любому TEMPLATES.src возвращаются мгновенно.
-    await unitloading.preloadAllTemplateImages();
+    await Promise.all([
+        unitloading.preloadAllTemplateImages(),
+        unitloading.preloadUIImages(),
+    ]);
 
     // Стартовый сценарий
     await loadScenario('A');

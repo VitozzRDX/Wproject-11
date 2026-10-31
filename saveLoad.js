@@ -125,8 +125,17 @@ export async function load() {
     _restoreSetupPanelIfNeeded(snapshot);
     _restoreSetupBoundsHighlightIfNeeded(snapshot);
     _restoreSmokeVisuals();
+    _restoreCCHexes();
+    State.deadUnitImages = {};   // снимки из прошлой сессии больше не нужны
 
     console.log('[load] snapshot loaded');
+}
+
+// Пере-подсветить CC-хексы после load (ccHexes уже восстановлен из STATE_FIELDS).
+function _restoreCCHexes() {
+    if (State.ccHexes && State.ccHexes.length) {
+        UIState.setCCHexes(State.ccHexes);
+    }
 }
 
 // Текст "Turn N / M" — после load пересоздаём из восстановленных playerTurn + scen.gameLength.
@@ -160,7 +169,7 @@ function _restoreHillCounter() {
         if (side === 'axis') ax++;
         else if (side === 'allied') al++;
     }
-    setTimeout(() => UIState.setHillControlText(`Hill: Ax ${ax} / Al ${al}`), 50);
+    setTimeout(() => UIState.setHillControlText(`Hill Control : AXIS [${ax}] / ALLY [${al}]`), 50);
 }
 
 // Пере-отрисовать дым из State.dynamicTerrain. State поле восстановлено, но clearAll уничтожил

@@ -7,6 +7,7 @@ import { UIState } from './uiState.js';
 import { spawn_unit, TEMPLATES, UNIT_IMAGE_SIZE } from './unitloading.js';
 import { getLastHit } from './terrainLOS.js';
 import { flipReplaceUnit, raiseToTop, shakeNode } from './renderer.js';
+import { getCCConfirmButtonPos } from './rendererUI.js';
 import { recalculateHex, recalculateHexInstant } from './positioning.js';
 import { save, load } from './saveLoad.js';
 import { initSetupSide, applyDiceRoll, placeFromPool, returnToPool, instantUnitMoveFromHexToHex, refreshSetupPanel } from './setupPhase.js';
@@ -161,7 +162,7 @@ const handlers = {
             State.setupSide = null;
             State.idsInSetupPool = [];
             UIState.hideSetupPanel();
-            UIState.addButton('NextPhase', { x: 10, y: 10, label: 'NextPhase' });
+            UIState.addButton('NextPhase', { x: 10, y: 10, label: 'NextPhase', text: 'NEXT PHASE' });
             UIState.setTurnText(`TURN 1 / ${Math.ceil(State.currentScenario.gameLength / 2)}`);
             PhaseManager.setPhase('rally');
             console.log('[Setup] done → rally');
@@ -204,6 +205,25 @@ const handlers = {
         if (State.lastGroupInteracted === 'targets') {
             State.lastGroupInteracted = null;
             UIState.hideTargetPanel();
+            return;
+        }
+        // CCPh: Esc сбрасывает текущую не-подтверждённую VS-строку (пулы активной declaring стороны)
+        // + снимает ccSelected со всех текущих выбранных. Confirm-нутые VS-строки не трогаем.
+        if (PhaseManager.getPhase() === 'closeCombat' && State.ccSelectedIds.length > 0) {
+            for (const uid of State.ccSelectedIds) {
+                State.setUnit(uid, 'ccSelected', false);
+            }
+            State.ccSelectedIds = [];
+            if (State.ccDefenderDeclaring) {
+                State.ccDefenderAttackers = [];
+                State.ccDefenderDefenders = [];
+            } else {
+                State.ccAttackerAttackers = [];
+                State.ccAttackerDefenders = [];
+            }
+            UIState.setCCPanelSelect([]);
+            _refreshCCConfirmButton();   // Confirm должен снова стать неактивным
+            _refreshCCPanels();          // текущая VS-строка исчезнет, main-панель получит юнитов обратно
             return;
         }
         if (State.fireGroup.length > 0) {
@@ -417,9 +437,12 @@ const handlers = {
         const units = Object.values(State.units).filter(u =>
             u.category === 'infantry' && isSameHex(u.hex, hex)
         );
-        UIState.showCCPanel(units);
-        UIState.addButton('ConfirmCCAttack', { x: 20, y: 100, label: 'ConfirmCCAttack' });
-        UIState.fadeButton('ConfirmCCAttack');   // активна только когда есть пара attacker+target в пулах
+        // Запомнить всех участников hex'а и их before-снимок — панель результатов строится в _finalizeCCHex.
+        State.ccHexParticipants = units.map(u => u.id);
+        State.ccBeforeSnap = _snapshotTargetsBeforeFireEffect(State.ccHexParticipants);
+        _refreshCCPanels();   // стартовая отрисовка: все юниты в main-панели, VS-строки пусты
+        // UIState.addButton('Confirm', { x: 20, y: 100, label: 'Confirm' });
+        // UIState.fadeButton('Confirm');   // активна только когда есть пара attacker+target в пулах
         State.ambushSide = null;
         State.ccAmbushRound = null;
         // Ambush eligible: woods/building hex, и никто из юнитов не в Melee (Melee = reinforcing, не ambush).
@@ -427,20 +450,35 @@ const handlers = {
             u.category === 'infantry' && isSameHex(u.hex, hex) && u.inMelee
         );
         if (Rules.isAmbushEligibleHex(hex) && !anyInMelee) {
-            UIState.addButton('RollAmbush', { x: 20, y: 220, label: 'RollAmbush' });
+            State.ambushPending = true;
+            UIState.addButton('RollAmbush', { x: 10, y: 66, label: 'RollAmbush', text: 'Roll Ambush' });
         }
         console.log(`[CCPh] selected hex (${hex.col},${hex.row}), units=${units.length}`);
     },
 
     RollAmbush: () => {
+        State.ambushPending = false;
         State.ambushSide = Rules.rollAmbush(State.currentCCHex, State.units);
         console.log(`[Ambush] result: ${State.ambushSide ?? 'none'}`);
+
         UIState.removeButton('RollAmbush');
-        if (!State.ambushSide) return;   // нет успеха → обычный флоу
+        if (!State.ambushSide) {
+            UIState.showActiveSidePlank({ slot: 0, badge: _currentDeclaringBadge() });
+            return;   // нет успеха → обычный флоу
+        }
         State.ccAmbushRound = 'round 1';
         State.ccDefenderDeclaring = (State.ambushSide === 'defender');
         State.ccSelectedIds = [];
-        UIState.addButton('StartCC', { x: 20, y: 180, label: 'StartCC' });
+
+        // Инфо-планка висит 3 секунды поверх всего (не блокируя сборку остального интерфейса).
+        UIState.showAmbushInfoPlank({ badge: _currentDeclaringBadge() });
+        setTimeout(() => UIState.hideAmbushInfoPlank(), 3000);
+
+        // Сразу строим обычный интерфейс для раунда 1.
+        UIState.showActiveSidePlank({ slot: 0, badge: _currentDeclaringBadge() });
+        UIState.addButton('StartCC', {     x: 10,
+    y: window.innerHeight - 96,   label: 'StartCC', text: 'Roll Close Combat !' });
+    _correct_StartCC_text_button();   // списки ещё пустые → переключит на 'Skip Combat Roll'
         console.log(`[Ambush] ${State.ambushSide} declares first`);
     },
 
@@ -462,9 +500,10 @@ const handlers = {
         State.setUnit(uid, 'ccSelected', true);
         UIState.setCCPanelSelect(_allCurrentSelected());
         _refreshCCConfirmButton();
+        _refreshCCPanels();   // юнит ушёл из main-панели в in-progress VS
     },
 
-    ConfirmCCAttack: () => {
+    Confirm: () => {
         const confirmed = State.ccDefenderDeclaring
             ? _confirmAttackFromPools(State.ccDefenderAttackers, State.ccDefenderDefenders, State.ccDefenderList)
             : _confirmAttackFromPools(State.ccAttackerAttackers, State.ccAttackerDefenders, State.ccAttackerList);
@@ -477,23 +516,21 @@ const handlers = {
         console.log('[CCPh] atk:', State.ccAttackerList.map(a => `[${a.attackers}]→[${a.targets}]`).join(' | '),
                     '| def:', State.ccDefenderList.map(a => `[${a.attackers}]→[${a.targets}]`).join(' | '));
         _refreshCCConfirmButton();
-        // Auto-swap в defender declare только в non-ambush, когда все attacker-юниты задействованы.
-        if (!State.ccAmbushRound) {
-            const attackersInHex = Object.values(State.units).filter(u =>
-                u.category === 'infantry' && u.side === 'attacker'
-                && isSameHex(u.hex, State.currentCCHex)
-            );
-            const usedAttackers = new Set(State.ccAttackerList.flatMap(a => a.attackers));
-            if (attackersInHex.every(u => usedAttackers.has(u.id))) {
-                State.ccDefenderDeclaring = true;
-                State.ccSelectedIds = [];                     // defender declare — свежий tracking
-                UIState.removeButton('ConfirmCCAttack');
-                UIState.addButton('ConfirmCCDefend', { x: 20, y: 100, label: 'ConfirmCCDefend' });
-                UIState.fadeButton('ConfirmCCDefend');
-                UIState.addButton('StartCC',         { x: 20, y: 140, label: 'StartCC' });
-                console.log('[CCPh] all attackers declared → defender declares');
-            }
+        _refreshCCPanels();   // новая атака залочена → добавить её VS-строку, обновить main
+        _correct_StartCC_text_button();   // в ambush-раунде кнопка StartCC уже на экране — обновить её подпись
+        // Auto-swap в defender declare только в non-ambush.
+        // Если в main-панели не осталось обеих сторон — attacker больше не может сформировать
+        // новую пару (нужны и свои, и чужие в hex'е). Значит он распределил всех кого хотел.
+        // sidesLeft.size === 0 — всех использовал; === 1 — остались только свои или только чужие.
+        // Non-ambush: после первой Confirm показываем StartDefenderCC. Свап — строго по её клику.
+        if (!State.ccAmbushRound && State.ccAttackerList.length >= 1) {
+            UIState.addButton('StartDefenderCC', { x: 20, y: window.innerHeight - 96, label: 'StartDefenderCC' });
         }
+    },
+
+    StartDefenderCC: () => {
+        _swapToDefenderDeclare();
+        console.log('[CCPh] attacker chose to end declaring → defender declares');
     },
 
     ConfirmCCDefend: () => {
@@ -508,6 +545,8 @@ const handlers = {
         console.log('[CCPh] def confirm:',
             State.ccDefenderList.map(a => `[${a.attackers}]→[${a.targets}]`).join(' | '));
         _refreshCCConfirmButton();
+        _refreshCCPanels();   // новая defender-атака залочена → добавить VS-строку, обновить main
+        _correct_StartCC_text_button();   // non-ambush: StartCC на экране после swap — обновить подпись
     },
 
     StartCC: async () => {
@@ -848,10 +887,11 @@ const handlers = {
         console.log(`[APh] ${uid} advanced to (${targetHex.col},${targetHex.row})`);
         _markCCHexIfEnemyPresent(unit, targetHex);
         _updateHexControl(targetHex);
+        _refreshDMAdjacency();   // A3.5
         _eliminateIfOutOfBounds(uid);
     },
 
-    NextPhase: () => {
+    NextPhase: async () => {
         const prevPhase = PhaseManager.getPhase();
         const p = PhaseManager.next();
         UIState.rotateImage('turnphase', -45);   // 1/8 оборота против часовой (одна грань)
@@ -988,6 +1028,10 @@ const handlers = {
         }
         // Выход из CCPh — очистить.
         if (prevPhase === 'closeCombat') {
+            // Снять Pin со всех — Pin counters убираются в конце CCPh.
+            for (const u of Object.values(State.units)) {
+                if (u.pinned) State.setUnit(u.id, 'pinned', false);
+            }
             for (const u of Object.values(State.units)) {
                 if (u.ccSelected) State.setUnit(u.id, 'ccSelected', false);
             }
@@ -1006,10 +1050,15 @@ const handlers = {
             State.ccDefenderDeclaring = false;
             State.ambushSide = null;
             State.ccAmbushRound = null;
+            State.ccBeforeSnap = null;
+            State.ccHexParticipants = null;
             UIState.setCCHexes([]);
             UIState.hideCCPanel();
-            UIState.removeButton('ConfirmCCAttack');
+            UIState.hideCCAttackPanels();
+            UIState.hideActiveSidePlank();
+            UIState.removeButton('Confirm');
             UIState.removeButton('ConfirmCCDefend');
+            UIState.removeButton('StartDefenderCC');
             UIState.removeButton('RollAmbush');
             UIState.removeButton('StartCC');
             // 3.9 Turn Record: attacker ↔ defender.
@@ -1075,6 +1124,7 @@ const handlers = {
 
         // Выход из RtPh: снять все rout-поля + overlay.
         if (prevPhase === 'rout') {
+            await _eliminateMustRoutFailures();   // кто не выполнил mustRout — KIA
             for (const u of Object.values(State.units)) {
                 if (u.mustRout)              State.setUnit(u.id, 'mustRout', false);
                 if (u.keuIDsList?.length)    State.setUnit(u.id, 'keuIDsList', []);
@@ -1407,7 +1457,7 @@ function _refreshHexControlCounter() {
         if (side === 'axis') ax++;
         else if (side === 'allied') al++;
     }
-    UIState.setHillControlText(`Hill: Ax ${ax} / Al ${al}`);
+    UIState.setHillControlText(`Hill Control : AXIS [${ax}] / ALLY [${al}]`);
 }
 
 // Проверка автопобеды Allied в конце TURN 4 за контроль hill/crest.
@@ -1462,12 +1512,185 @@ function _allCurrentSelected() {
         : [...State.ccAttackerAttackers, ...State.ccAttackerDefenders];
 }
 
-// Обновить активность текущей confirm-кнопки CCPh по тому, есть ли пара (attackers + targets) в соответствующих пулах.
+// Собрать VS-панели: по одной на каждую подтверждённую атаку + одна «in-progress» (текущие пулы).
+// Каждая панель: {left: [{image}], right: [{image}]}. image уже учитывает broken-флаг.
+// Если юнит уже удалён из State (например KIA после ambush round 1) — image=null, renderer его пропустит.
+function _buildVSPanelsData() {
+    const panels = [];
+
+    const resolveItem = id => {
+        const u = State.units[id];
+        if (u) {
+            return { image: u.broken ? u.brokenImage : u.image, kia: false };      // живой юнит
+        }
+        const img = State.deadUnitImages[id];
+        if (img) {
+            return { image: img, kia: true };                                      // убитый — снимок + KIA
+        }
+        return { image: null, kia: false };                                        // неизвестный id — пусто
+    };
+
+    // Порядок панелей: сторона, что декларировала первой — сверху. В non-ambush и
+    // в ambush c atk-first это attacker; в ambush defender-first — defender.
+    const defenderFirst = State.ambushSide === 'defender';
+    const firstList  = defenderFirst ? State.ccDefenderList : State.ccAttackerList;
+    const secondList = defenderFirst ? State.ccAttackerList : State.ccDefenderList;
+
+    let slot = 1;                                                      // слот 0 — верхняя планка; VS-панели с 1
+    for (const entry of firstList) {
+        panels.push({
+            slot: slot++,
+            left:  entry.attackers.map(resolveItem),
+            right: entry.targets.map(resolveItem),
+        });
+    }
+    // Пропуск слота под 2-ю планку: она есть, когда текущая declaring-сторона — не та, что декларировала первой.
+    // В non-ambush первой всегда attacker, в ambush — ambushSide. После swap/round-2 стороны различаются.
+    const firstDeclaringIsDefender = defenderFirst;
+    if (State.ccDefenderDeclaring !== firstDeclaringIsDefender) slot++;
+    for (const entry of secondList) {
+        panels.push({
+            slot: slot++,
+            left:  entry.attackers.map(resolveItem),
+            right: entry.targets.map(resolveItem),
+        });
+    }
+
+    // In-progress: текущие пулы (то, что игрок сейчас набирает перед Confirm).
+    let curLeft, curRight;
+    if (State.ccDefenderDeclaring) {
+        curLeft  = State.ccDefenderAttackers;
+        curRight = State.ccDefenderDefenders;
+    } else {
+        curLeft  = State.ccAttackerAttackers;
+        curRight = State.ccAttackerDefenders;
+    }
+    if (curLeft.length || curRight.length) {
+        panels.push({
+            slot,                                                      // следующий свободный слот после всех confirmed
+            left:  curLeft.map(resolveItem),
+            right: curRight.map(resolveItem),
+        });
+    }
+
+    return panels;
+}
+
+// Юниты для основной CC-панели: все пехотинцы в hex'е минус те, что уже «использованы»
+// в текущей декларации (атаках + пулах той стороны, что сейчас назначает атаки).
+function _buildMainCCPanelUnits() {
+    const hex = State.currentCCHex;
+    if (!hex) return [];
+    const allInHex = Object.values(State.units).filter(u =>                       // все пехотинцы в hex'е
+        u.category === 'infantry' && isSameHex(u.hex, hex)
+    );
+
+    // Кто сейчас назначает атаки — attacker или defender; берём его списки/пулы.
+    let confirmedList, poolA, poolD;
+    if (State.ccDefenderDeclaring) {
+        confirmedList = State.ccDefenderList;
+        poolA         = State.ccDefenderAttackers;
+        poolD         = State.ccDefenderDefenders;
+    } else {
+        confirmedList = State.ccAttackerList;
+        poolA         = State.ccAttackerAttackers;
+        poolD         = State.ccAttackerDefenders;
+    }
+
+    const used = new Set();                                                        // id юнитов, уже учтённых в текущей декларации
+    for (const attack of confirmedList) {
+        for (const id of attack.attackers) used.add(id);
+        for (const id of attack.targets)   used.add(id);
+    }
+    for (const id of poolA) used.add(id);
+    for (const id of poolD) used.add(id);
+
+    return allInHex.filter(u => !used.has(u.id));
+}
+
+// Единая точка обновления обеих CC-панелей (основная + VS-строки).
+function _refreshCCPanels() {
+    UIState.showCCPanel(_buildMainCCPanelUnits());
+    UIState.showCCAttackPanels(_buildVSPanelsData());
+}
+
+// Обновляет подпись кнопки StartCC в зависимости от того, будет ли реально бросок.
+function _correct_StartCC_text_button() {
+    if (!UIState.buttons['StartCC']) return;   // кнопки нет на экране — обновлять нечего
+    let wantText;
+    if (State.ccAmbushRound) {
+        const list = State.ambushSide === 'attacker'   // в ambush-раунде катит только одна сторона — та, что застала врасплох
+            ? State.ccAttackerList                     // ambushSide='attacker' → её атаки лежат в ccAttackerList
+            : State.ccDefenderList;                    // иначе — атаки защитника в ccDefenderList
+        wantText = list.length > 0                     // пустой список атак у катящей стороны = кубы не бросаются
+            ? 'Roll Close Combat !'
+            : 'Skip Combat Roll';
+    } else {
+        const atkEmpty = State.ccAttackerList.length === 0;   // обычный раунд: катят обе стороны
+        const defEmpty = State.ccDefenderList.length === 0;
+        if (atkEmpty && defEmpty)       wantText = 'Skip Combat Roll';        // оба пусты — катить нечего
+        else if (defEmpty)              wantText = 'Roll CC (Skip Defender)'; // защитник не выбрал — катим только атакера
+        else if (atkEmpty)              wantText = 'Roll CC (Skip Attacker)'; // симметрично (на всякий)
+        else                            wantText = 'Roll Close Combat !';     // обе стороны с атаками
+    }
+    UIState.addButton('StartCC', {
+        x: 10, y: window.innerHeight - 96,
+        label: 'StartCC', text: wantText,
+    });
+}
+
+// Хелпер: 'allied'|'axis' значок для текущей declaring стороны (той, кто сейчас назначает атаки).
+function _currentDeclaringBadge() {
+    const AXIS = new Set(['german', 'italian', 'japanese']);
+    const role = State.ccDefenderDeclaring ? 'defender' : 'attacker';
+    const u = Object.values(State.units).find(u => u.side === role && u.category === 'infantry');
+    return AXIS.has(u && u.nation) ? 'axis' : 'allied';
+}
+
+// Планка «второй стороны»: показывается, когда declaring только что переключилась,
+// а под VS-строками первой стороны уже лежат её подтверждённые атаки.
+// Слот = длина списка первой стороны + 1 (сразу под её последней VS-строкой).
+function _showSecondDeclaringPlank() {
+    const firstList = State.ambushSide === 'defender'   // в ambush первой катит ambushSide; в non-ambush ambushSide отсутствует → attacker
+        ? State.ccDefenderList
+        : State.ccAttackerList;
+    UIState.showActiveSidePlank({
+        slot: firstList.length + 1,
+        badge: _currentDeclaringBadge(),
+    });
+}
+
+// Переход в режим defender declare (из auto-swap или ручного StartDefenderCC).
+function _swapToDefenderDeclare() {
+    State.ccDefenderDeclaring = true;
+    State.ccSelectedIds = [];
+    UIState.removeButton('Confirm');
+    UIState.removeButton('StartDefenderCC');
+    // UIState.addButton('ConfirmCCDefend', { x: 20, y: 100, label: 'ConfirmCCDefend' });
+    // UIState.fadeButton('ConfirmCCDefend');
+    UIState.addButton('StartCC',         {     x: 10,
+    y: window.innerHeight - 96,   label: 'StartCC', text: 'Roll Close Combat !' });
+    _correct_StartCC_text_button() // ccDefenderList пустой → переключит на 'Skip Combat Roll'
+    _refreshCCPanels();
+    _showSecondDeclaringPlank();   // планка защитника под VS-строками атакера
+}
+
+// Обновить активность текущей confirm-кнопки CCPh + её позицию (справа от последней VS-панели).
+// В attacker declare — ключ 'Confirm', в defender declare — 'ConfirmCCDefend'.
 function _refreshCCConfirmButton() {
-    const label = UIState.buttons && UIState.buttons['ConfirmCCDefend'] ? 'ConfirmCCDefend' : 'ConfirmCCAttack';
+    const label = State.ccDefenderDeclaring ? 'ConfirmCCDefend' : 'Confirm';
+    const panels = _buildVSPanelsData();
+    if (panels.length === 0) {   // ни confirmed атак, ни in-progress пулов — ставить Confirm некуда
+        UIState.removeButton(label);
+        return;
+    }
+    const lastSlot = panels[panels.length - 1].slot;
+    const { x, y } = getCCConfirmButtonPos(lastSlot);
     const hasPair = State.ccDefenderDeclaring
         ? (State.ccDefenderAttackers.length > 0 && State.ccDefenderDefenders.length > 0)
         : (State.ccAttackerAttackers.length > 0 && State.ccAttackerDefenders.length > 0);
+    UIState.removeButton(label);
+    UIState.addButton(label, { x, y, label, text: 'Confirm' });   // ключ разный (Confirm/ConfirmCCDefend), отображаемый текст — всегда "Confirm"
     if (hasPair) UIState.redrawButton(label);
     else         UIState.fadeButton(label);
 }
@@ -1528,19 +1751,23 @@ async function _apply_effect_CC(effects) {
             await _killUnit(uid, { cause: 'cc', hex: u && u.hex });
         } else if (eff === 'reduce') {
             const u = State.units[uid];
-            if (u && u.halfSquad) _replace_unit(uid, u.halfSquad, uid);
-            else                  await _killUnit(uid, { cause: 'cc', hex: u && u.hex });
+            if (u && u.halfSquad) {
+                _replace_unit(uid, u.halfSquad, uid);
+                await sleep(400);   // ждём завершения flip-анимации — иначе afterSnap возьмёт старую иконку
+            } else {
+                await _killUnit(uid, { cause: 'cc', hex: u && u.hex });
+            }
         }
     }
 }
 
 // Резолвит CC в currentCCHex: считает эффекты обоих сторон, потом применяет simultaneous.
 async function _result_of_CC_in_hex() {
-    const effOnDefenders = _calc_effect_for_targets_CC(State.ccAttackerList, 'attacker');
+    const effOnDefenders = _calc_effect_for_targets_CC(State.ccAttackerList, 'attacker');   // возвращает объект { 'ge_467_01': 'kia', 'ge_447_02': 'reduce' }
     const effOnAttackers = _calc_effect_for_targets_CC(State.ccDefenderList, 'defender');
     await _apply_effect_CC(effOnDefenders);
     await _apply_effect_CC(effOnAttackers);
-    _finalizeCCHex();
+    _finalizeCCHex();   // панель результатов строится здесь (на основе ccBeforeSnap из SelectCCHex)
 }
 
 // Резолвит один раунд ambush-СС.
@@ -1552,7 +1779,7 @@ async function _resolveAmbushRound() {
     const list = declaringSide === 'attacker' ? State.ccAttackerList : State.ccDefenderList;
 
     // Посчитать эффект её атак (с ambush DRM внутри) и применить — часть целей гибнет или reduce'ится.
-    const eff = _calc_effect_for_targets_CC(list, declaringSide);
+    const eff = _calc_effect_for_targets_CC(list, declaringSide);   // { targetId: 'kia'|'reduce' }
     await _apply_effect_CC(eff);
 
     if (State.ccAmbushRound === 'round 1') {
@@ -1571,10 +1798,11 @@ async function _resolveAmbushRound() {
         State.ccDefenderDeclaring = (otherSide === 'defender');
         State.ccSelectedIds = [];
 
-        // Перерисовать CC-панель — мёртвых там уже не будет (State.units их удалил в apply).
-        UIState.showCCPanel(Object.values(State.units).filter(u =>
-            u.category === 'infantry' && isSameHex(u.hex, hex)
-        ));
+        _showSecondDeclaringPlank();   // раунд 2 ambush: declaring переключилась — планка под VS-строками первой стороны
+
+
+        // Перерисовать обе CC-панели — мёртвых там уже не будет (State.units их удалил в apply).
+        _refreshCCPanels();
         console.log(`[Ambush] round 2: ${otherSide} declares`);
     } else {
         // Уже был раунд 2 → CC полностью разрешён.
@@ -1585,6 +1813,17 @@ async function _resolveAmbushRound() {
 // Убирает currentCCHex из списка (или помечает Melee), гасит панель + кнопки.
 function _finalizeCCHex() {
     const hex = State.currentCCHex;
+
+    // Target-панель результатов CC (before — из SelectCCHex, after — сейчас).
+    const afterSnap = _snapshotTargetsAfterFireEffect(State.ccHexParticipants, State.ccBeforeSnap);
+    const panel = _createTargetPanel(State.ccBeforeSnap, afterSnap);
+    if (panel.length) {
+        State.lastGroupInteracted = 'targets';
+        UIState.showTargetPanel(panel);
+    }
+    State.ccBeforeSnap = null;
+    State.ccHexParticipants = null;
+
     if (Rules.check_if_both_sides_still_in_hex(hex, State.units)) {
         for (const u of Object.values(State.units)) {
             if (u.category === 'infantry' && isSameHex(u.hex, hex)) {
@@ -1601,8 +1840,11 @@ function _finalizeCCHex() {
     State.ambushSide = null;
     State.ccAmbushRound = null;
     UIState.hideCCPanel();
-    UIState.removeButton('ConfirmCCAttack');
+    UIState.hideCCAttackPanels();
+    UIState.hideActiveSidePlank();
+    UIState.removeButton('Confirm');
     UIState.removeButton('ConfirmCCDefend');
+    UIState.removeButton('StartDefenderCC');
     UIState.removeButton('StartCC');
     UIState.removeButton('RollAmbush');
 }
@@ -1962,11 +2204,27 @@ function isLegalRoutStep(unit, targetHex) {
     const keuUnits = unit.keuIDsList.map(id => State.units[id]);
     if (!Rules.check_KEU_range_and_adjacency(unit.hex, targetHex, keuUnits)) return false;
     if (unit.routPathHexes && !unit.routPathHexes.has(`${targetHex.col},${targetHex.row}`)) return false;
+    if (!Rules.checkOverstack(targetHex, [unit.id], State.units)) return false;   // в target-hex-е той же стороны: 3 squads / 4 leaders максимум
     return true;
 }
 
 // State mutations. MF-check уже пройден в handler'е. path не обновляем — в RtPh не используется.
 // Ветвление обычный rout / LowCrawl: LC тратит весь MF, ставит usedLowCrawl (skip interdiction).
+// A3.5: любой broken-no-DM юнит, оказавшийся adjacent к unbroken-врагу, получает DM.
+function _refreshDMAdjacency() {
+    for (const u of Object.values(State.units)) {
+        if (!u.broken || u.desperationMorale) continue;
+        if (u.category !== 'infantry') continue;
+        const adjEnemy = Object.values(State.units).find(e =>
+               e.side !== u.side
+            && e.category === 'infantry'
+            && !e.broken
+            && isAdjacent(e.hex, u.hex)
+        );
+        if (adjEnemy) State.setUnit(u.id, 'desperationMorale', true);
+    }
+}
+
 function _applyRoutMove(unit, targetHex, isWoodsRoad) {
     if (State.pendingLowCrawl) {
         State.setUnit(unit.id, 'mf', 0);
@@ -2087,7 +2345,9 @@ function _redrawRoutOverlay(unit) {
         UIState.setRoutShelters([]);
         UIState.setRoutPathHexes([]);
         const keuUnits = unit.keuIDsList.map(id => State.units[id]);
-        UIState.setRoutLegalHexes(Rules.legalRoutNeighbors(unit, keuUnits));
+        const legal = Rules.legalRoutNeighbors(unit, keuUnits)
+            .filter(h => Rules.checkOverstack(h, [unit.id], State.units));   // убираем overstack-забитые hex-ы из подсветки
+        UIState.setRoutLegalHexes(legal);
     }
 }
 
@@ -2142,6 +2402,19 @@ async function _killUnit(id, context) {
         _grantVP('axis',   vp.axis);
     }
     await _eliminateWithKIA(id);
+}
+
+// Элиминирует всех юнитов, у которых к концу RtPh остался mustRout — провалили обязанность раутиться.
+async function _eliminateMustRoutFailures() {
+    const failedIds = Object.values(State.units)
+        .filter(u => u.mustRout)
+        .map(u => u.id);
+    for (const id of failedIds) {
+        const u = State.units[id];
+        if (!u) continue;
+        console.log(`[RtPh end] ${id} failed to rout → eliminated`);
+        await _killUnit(id, { cause: 'rout', hex: u.hex });
+    }
 }
 
 // Финализация раута для одного юнита (safe): очистка полей + overlay + кнопки.
@@ -2467,6 +2740,7 @@ function _drawLOS(shooterHexes, targetHex, validHexes) {
 function _remove_unit(unitId) {
     const u = State.units[unitId];
     if (!u) return;
+    State.deadUnitImages[unitId] = u.broken ? u.brokenImage : u.image;   // снимок иконки для панелей (CC, target)
     const hexOfDead = u.hex;   // запомнить чтобы перепозиционировать weapons после удаления
     const layer = u.node.getLayer();
     u.node.destroy();
@@ -2720,6 +2994,7 @@ async function _apply_movement_result_in_State_for_all_MG(result, targetHex, ove
     });
     _updateHexControl(targetHex);   // A26: Good Order MMC в hex'е без enemy → контроль нашей стороне
     _refreshGroupPanel();           // mf юнитов изменился, hex тоже → пересчитать число над панелью
+    _refreshDMAdjacency();          // A3.5: broken-no-DM, оказавшийся рядом с unbroken-врагом, получает DM
     // Out-of-bounds: если targetHex вне scen.playArea — все вошедшие юниты элиминируются.
     if (_isOutOfBounds(targetHex)) {
         for (const unitId of Object.keys(result.unitChanges)) {

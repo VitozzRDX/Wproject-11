@@ -275,11 +275,18 @@ const RULES = [
         requiresAny: [
             {
                 noShift:               ctx => !ctx.shiftKey,
-                leftClick:      ctx => ctx.button !== 2,
-                noFireGroup: () => State.fireGroup.length === 0,
-                // somethingSelected: () => State.selected !== null,
-                // selectedUnitIsAttacker: () => State.units[State.selected].side === PhaseManager.getActiveRole(),
-                movingGroupIsnotEmpty: () => State.movementGroup.length > 0
+                leftClick:             ctx => ctx.button !== 2,
+                noFireGroup:           () => State.fireGroup.length === 0,
+                movingGroupIsnotEmpty: () => State.movementGroup.length > 0,
+                // Клик по юниту, стоящему в origin-hex-е MG — считаем попыткой выбрать юнит, а не «откат».
+                // Войти обратно в origin можно, но клик должен быть мимо картинки юнита.
+                noBackstepOnUnit: ctx => {
+                    if (ctx.unitId === undefined) return true;
+                    const origin = State.movementStackHex;
+                    if (!origin) return true;
+                    const clickedHex = State.units[ctx.unitId].hex;
+                    return !(clickedHex.col === origin.col && clickedHex.row === origin.row);
+                },
             }
         ],
         name: 'MOVE'
@@ -432,7 +439,6 @@ const RULES = [
             phaseIsCC:    ()  => PhaseManager.getPhase() === 'closeCombat',
             leftClick:    ctx => ctx.button !== 2,
             notPanel:     ctx => !ctx.ccPanel,
-            notUnit:      ctx => ctx.unitId === undefined,   // клик по пустому хексу, не по юниту
             notButton:    ctx => ctx.buttonLabel === undefined,
         }],
         name: 'SelectCCHex'
@@ -444,17 +450,27 @@ const RULES = [
             leftClick:    ctx => ctx.button !== 2,
             ccPanel:      ctx => ctx.ccPanel,
             hasUnit:      ctx => ctx.unitId !== undefined,
+            notAmbushPending: () => !State.ambushPending,
         }],
         name: 'CCToggleUnit'
     },
-    // CCPh: кнопка ConfirmCCAttack → зафиксировать текущий выбор как одну атаку.
+    // CCPh: кнопка Confirm (ex-ConfirmCCAttack) → зафиксировать текущий выбор как одну атаку.
     {
         requiresAny: [{
             phaseIsCC:  ()  => PhaseManager.getPhase() === 'closeCombat',
             leftClick:  ctx => ctx.button !== 2,
-            clickedBtn: ctx => ctx.buttonLabel === 'ConfirmCCAttack',
+            clickedBtn: ctx => ctx.buttonLabel === 'Confirm',
         }],
-        name: 'ConfirmCCAttack'
+        name: 'Confirm'
+    },
+    // CCPh: кнопка StartDefenderCC → ручной переход в defender declare (attacker закончил не всеми).
+    {
+        requiresAny: [{
+            phaseIsCC:  ()  => PhaseManager.getPhase() === 'closeCombat',
+            leftClick:  ctx => ctx.button !== 2,
+            clickedBtn: ctx => ctx.buttonLabel === 'StartDefenderCC',
+        }],
+        name: 'StartDefenderCC'
     },
     // CCPh: кнопка ConfirmCCDefend → фиксировать выбор как одну defender-атаку.
     {

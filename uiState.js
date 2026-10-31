@@ -106,6 +106,11 @@ export const UIState = {
         this.subscribers.forEach(sub => sub('hideTargetPanel', null, null));
     },
 
+    // Центровать камеру на hex (универсально — не только для CC).
+    centerOnHex(hex) {
+        this.subscribers.forEach(sub => sub('centerOnHex', null, { hex }));
+    },
+
     // Текст с итоговым FP у hex'а-цели при hover в огневой фазе.
     setHoverFP(hex, fp) {
         this.subscribers.forEach(sub => sub('setHoverFP', null, { hex, fp }));
@@ -161,6 +166,30 @@ export const UIState = {
 
     hideCCPanel() {
         this.subscribers.forEach(sub => sub('hideCCPanel', null, {}));
+    },
+
+    // Горизонтальные VS-панели CC-атак (одна строка на атаку). Payload — [{left:[{image}], right:[{image}]}].
+    showCCAttackPanels(panels) {
+        this.subscribers.forEach(sub => sub('showCCAttackPanels', null, { panels }));
+    },
+    hideCCAttackPanels() {
+        this.subscribers.forEach(sub => sub('hideCCAttackPanels', null, null));
+    },
+
+    // Планка «[side] choose Close Combatants :» на месте RollAmbush (появляется если ambush не удался).
+    showActiveSidePlank(payload) {
+        this.subscribers.forEach(sub => sub('showActiveSidePlank', null, payload));
+    },
+
+    // Инфо-планка «Ambush ! declares first» — на 1 секунду после успешного Ambush.
+    showAmbushInfoPlank(payload) {
+        this.subscribers.forEach(sub => sub('showAmbushInfoPlank', null, payload));
+    },
+    hideAmbushInfoPlank() {
+        this.subscribers.forEach(sub => sub('hideAmbushInfoPlank', null, {}));
+    },
+    hideActiveSidePlank() {
+        this.subscribers.forEach(sub => sub('hideActiveSidePlank', null, null));
     },
 
     setCCPanelSelect(selectedIds) {

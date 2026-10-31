@@ -3,7 +3,7 @@ import { terrainAt } from './cards.js';
 import { bresenham, pixel_is_on_Obstacle_set, setLastHit } from './terrainLOS.js';
 import { PhaseManager } from './phase_manager.js';
 
-const OBSTACLES = ['woods', 'buildings', 'hills'];
+const OBSTACLES = ['woods', 'woodsInside', 'buildings', 'hills'];
 
 // ===========================================================================
 // IFT (Infantry Fire Table)
@@ -598,6 +598,8 @@ function _processMC(targets, k, result, fixedDr = null) {
         //   halfSquad/crew → eliminated
         //   squad → reduced (→ HS)
         if (u.broken) {
+            // A3.5: broken-no-DM цель, участвующая в MC/NMC-ролле от FP → ставим DM независимо от исхода
+            if (!u.desperationMorale) _placeDM(u);
             if (baseDr === 12) {
                 console.log(`[MC broken original 12] ${u.id} → eliminated`);
                 return 'eliminated';
