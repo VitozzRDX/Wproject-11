@@ -2,6 +2,7 @@ import { hexDistance, hexLabel, hexToPixel, pixelToHex, isSameHex, R, calcNeares
 import { terrainAt } from './cards.js';
 import { bresenham, pixel_is_on_Obstacle_set, setLastHit } from './terrainLOS.js';
 import { PhaseManager } from './phase_manager.js';
+import { gameLog } from './gameLog.js';
 
 const OBSTACLES = ['woods', 'woodsInside', 'buildings', 'hills'];
 
@@ -1599,15 +1600,32 @@ function calc_road_bonus_per_unit(mg, units, result, targetHex, overrideTerrain 
 
 export const Rules = {
     checkIfAddingToMovementGroupIsValid(unit, movementStackHex, movingSide, mg, units) {
-        if (unit.pinned)    { console.log(`Не можем двигаться этим юнитом - юнит pinned (${unit.id})`); return false; }
-        if (unit.broken)    { console.log(`Не можем двигаться этим юнитом - юнит broken (${unit.id})`); return false; }
-        if (unit.prepFired) { console.log(`Не можем двигаться этим юнитом - стрелял в PFPh (${unit.id})`); return false; }
-        if (unit.movementCompleted) { console.log(`Не можем двигаться этим юнитом - уже закончил движение в MPh (${unit.id})`); return false; }
+        if (unit.pinned)    {
+            console.log(`Не можем двигаться этим юнитом - юнит pinned (${unit.id})`);
+            gameLog(`unit #${unit.id} ${unit.type} cannot be added to Move Group — unit is pinned`);
+            return false;
+        }
+        if (unit.broken)    {
+            console.log(`Не можем двигаться этим юнитом - юнит broken (${unit.id})`);
+            gameLog(`unit #${unit.id} ${unit.type} cannot be added to Move Group — unit is broken`);
+            return false;
+        }
+        if (unit.prepFired) {
+            console.log(`Не можем двигаться этим юнитом - стрелял в PFPh (${unit.id})`);
+            gameLog(`unit #${unit.id} ${unit.type} cannot be added to Move Group — fired in PFPh`);
+            return false;
+        }
+        if (unit.movementCompleted) {
+            console.log(`Не можем двигаться этим юнитом - уже закончил движение в MPh (${unit.id})`);
+            gameLog(`unit #${unit.id} ${unit.type} cannot be added to Move Group — already finished moving this MPh`);
+            return false;
+        }
 
         const isInSameHex = unit.hex.col === movementStackHex.col &&
                             unit.hex.row === movementStackHex.row;
         if (!isInSameHex) {
             console.log(`Не можем двигаться этим юнитом - он в (${unit.hex.col},${unit.hex.row}), а группа формируется в (${movementStackHex.col},${movementStackHex.row})`);
+            gameLog(`unit #${unit.id} ${unit.type} cannot be added to Move Group — different hex (${unit.hex.col}-${unit.hex.row}) than the group's (${movementStackHex.col}-${movementStackHex.row})`);
             return false;
         }
         if (unit.side !== movingSide) {
@@ -1620,6 +1638,7 @@ export const Rules = {
             const mgMoved = mg.some(id => units[id].hasStartedMoving);
             if (mgMoved !== unit.hasStartedMoving) {
                 console.log(`Не можем добавить ${unit.id} - группа уже начала движение, а этот юнит ещё нет (или наоборот)`);
+                gameLog(`unit #${unit.id} ${unit.type} cannot be added to Move Group — mix of moved and not-yet-moved units. Finish moving of previous units first.`);
                 return false;
             }
         }
@@ -1628,51 +1647,83 @@ export const Rules = {
 
     checkIfAddingToFireGroupIsValid(unit, firingSide, fg, units) {
         // сломанный юнит (пехота или weapon) — не стреляет
-        if (unit.broken) return false;
+        if (unit.broken) {
+            gameLog(`unit #${unit.id} ${unit.type} cannot be added to Fire Group — unit is broken`);
+            return false;
+        }
 
         // В DFPh юнит с FinalFire counter не может стрелять (правило Final Fire)
         if (PhaseManager.getPhase() === 'defensiveFire' &&
             unit.category === 'infantry' &&
-            unit.firingStatus === 'FinalFire') return false;
+            unit.firingStatus === 'FinalFire') {
+            gameLog(`unit #${unit.id} ${unit.type} cannot be added to Fire Group — Final Fire counter in DFPh`);
+            return false;
+        }
 
         // AFPh (Advancing Fire) ограничения:
         //   — юнит, стрелявший в PFPh (prepFired) — не может.
         //   — юнит, уже стрелявший в AFPh (advFired) — не может ("no weapon fires more than once").
         //   — MMG/HMG, если possessor двигался в MPh — не может.
         if (PhaseManager.getPhase() === 'advancingFire') {
-            if (unit.prepFired) return false;
-            if (unit.advFired)  return false;
+            if (unit.prepFired) {
+                gameLog(`unit #${unit.id} ${unit.type} cannot be added to Fire Group — already fired in PFPh`);
+                return false;
+            }
+            if (unit.advFired)  {
+                gameLog(`unit #${unit.id} ${unit.type} cannot be added to Fire Group — already fired in AFPh`);
+                return false;
+            }
             if (unit.category === 'infantry' && unit.hasStartedMoving && false) { /* infantry не блокируется движением в AFPh */ }
         }
 
         if (unit.category === 'carried') {
             // валяется без хозяина
-            if (!unit.possessorId) return false;
+            if (!unit.possessorId) {
+                gameLog(`weapon #${unit.id} ${unit.type} cannot be added to Fire Group — weapon has no possessor`);
+                return false;
+            }
             const possessor = units[unit.possessorId];
             // хозяин не в форме — оружие не стреляет
-            if (possessor.broken || possessor.pinned) return false;
+            if (possessor.broken || possessor.pinned) {
+                gameLog(`weapon #${unit.id} ${unit.type} cannot be added to Fire Group — possessor is broken/pinned`);
+                return false;
+            }
             // Национальность weapon = национальность possessor'а (можно владеть трофейным)
-            if (possessor.side !== firingSide) return false;
+            if (possessor.side !== firingSide) {
+                gameLog(`weapon #${unit.id} ${unit.type} cannot be added to Fire Group — possessor is on the wrong side`);
+                return false;
+            }
 
             // AFPh: MMG/HMG не могут стрелять если оружие двигалось в MPh (сам weapon, не possessor).
             if (PhaseManager.getPhase() === 'advancingFire' &&
                 (unit.mgClass === 'MMG' || unit.mgClass === 'HMG') &&
                 unit.movedThisMPh) {
+                gameLog(`weapon #${unit.id} ${unit.type} cannot be added to Fire Group — MMG/HMG moved this MPh (no AFPh fire)`);
                 return false;
             }
             // AFPh: weapon уже стрелял в AFPh?
-            if (PhaseManager.getPhase() === 'advancingFire' && unit.advFired) return false;
+            if (PhaseManager.getPhase() === 'advancingFire' && unit.advFired) {
+                gameLog(`weapon #${unit.id} ${unit.type} cannot be added to Fire Group — weapon already fired in AFPh`);
+                return false;
+            }
             // AFPh: possessor стрелял в PFPh → его weapon тоже не может.
-            if (PhaseManager.getPhase() === 'advancingFire' && possessor.prepFired) return false;
+            if (PhaseManager.getPhase() === 'advancingFire' && possessor.prepFired) {
+                gameLog(`weapon #${unit.id} ${unit.type} cannot be added to Fire Group — possessor fired in PFPh`);
+                return false;
+            }
         } else {
             // Своя национальность у пехоты
-            if (unit.side !== firingSide) return false;
+            if (unit.side !== firingSide) {
+                gameLog(`unit #${unit.id} ${unit.type} cannot be added to Fire Group — wrong side (${unit.side}, expected ${firingSide})`);
+                return false;
+            }
         }
 
         // Общие правила смежности (те же для пехоты и weapon)
         if (!fg || fg.length === 0) return true;
         if (_check_if_unit_is_in_same_hex_as_fg(unit, fg, units)) return true;
         if (_check_link_for_firing_group(unit, fg, units)) return true;
+        gameLog(`unit #${unit.id} ${unit.type} cannot be added to Fire Group — not adjacent to current FG`);
         return false;
     },
 
@@ -1837,16 +1888,19 @@ export const Rules = {
     arrangeMovement(ctx) {
         if (ctx.movementGroup.length === 0) {
             console.log('[move] MG пусто');
+            gameLog('Move rejected: Move Group is empty');
             return null;
         }
 
         const fromHex = ctx.units[ctx.movementGroup[0]].hex;
         if (!isAdjacent(fromHex, ctx.targetHex)) {
             console.log(`[move] target (${ctx.targetHex.col},${ctx.targetHex.row}) не соседний с (${fromHex.col},${fromHex.row})`);
+            gameLog(`Move rejected: target ${ctx.targetHex.col}-${ctx.targetHex.row} is not adjacent to ${fromHex.col}-${fromHex.row}`);
             return null;
         }
         if (!checkOverstack(ctx.targetHex, ctx.movementGroup, ctx.units)) {
             console.log(`[move] overstack в target hex (макс 3 squads / 4 leaders)`);
+            gameLog('Move rejected: overstack in target hex (max 3 squads / 4 leaders)');
             return null;
         }
         // Запрет входа в hex с вражеской infantry (не Melee в MPh). Оружие на земле не считается.
@@ -1856,6 +1910,7 @@ export const Rules = {
         );
         if (enemyInfantryInTarget) {
             console.log(`[move] blocked: enemy infantry в target hex (${ctx.targetHex.col},${ctx.targetHex.row})`);
+            gameLog(`Move rejected: enemy infantry in target hex ${ctx.targetHex.col}-${ctx.targetHex.row}`);
             return null;
         }
 
@@ -1867,10 +1922,12 @@ export const Rules = {
             if (!u.assaultMovement) continue;
             if (u.hasStartedMoving) {
                 console.log(`[move] Assault Move: ${id} уже начал движение — нельзя`);
+                gameLog(`Move rejected: unit #${id} ${u.type} on Assault Move already moved`);
                 return null;
             }
             if (u.mf - checkCost(ctx.targetHex, u.hex, overrideTerrain) - _portageExcess(u, ctx.units, ctx.movementGroup) <= 0) {
                 console.log(`[move] Assault Move: ${id} истратил бы весь MF (запрещено правилом Assault Move)`);
+                gameLog(`Move rejected: unit #${id} ${u.type} on Assault Move would spend all MF (not allowed)`);
                 return null;
             }
         }
@@ -1887,6 +1944,7 @@ export const Rules = {
                 const m      = calc_mf(u, ctx.targetHex, ctx.movementGroup, ctx.units, overrideTerrain);
                 if (m === null) {
                     console.log(`[move] ${id}: mf=${u.mf} excess=${excess} cost=${cost} → effective=${eff}, бонусы не покрывают (leaderBonus=${u.leaderBonus}, roadBonus=${u.roadBonus})`);
+                    gameLog(`Move rejected: unit #${id} ${u.type} not enough MF (mf=${u.mf}, excess=${excess}, cost=${cost}, effective=${eff}; bonuses don't cover)`);
                 }
             }
             return null;

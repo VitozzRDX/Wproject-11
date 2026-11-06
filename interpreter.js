@@ -3,6 +3,7 @@ import { State } from './state.js'
 import { PhaseManager } from './phase_manager.js'
 import { pixelToHex, isSameHex } from './hexUtils.js'
 import { UIState } from './uiState.js'
+import { gameLog } from './gameLog.js'
 
 
 function createContext(e) {
@@ -682,6 +683,7 @@ export function interpretEvent(e) {
             const u = State.units[ctx.unitId];
             if (u && u.side !== 'attacker') {
                 console.log(`Не можем двигаться этим юнитом - чужая сторона (${u.side}, ждём attacker)`);
+                gameLog(`unit #${u.id} ${u.type} cannot be added to Move Group — in MPh only Attacker can move`);
             }
         }
         return;

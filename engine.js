@@ -11,6 +11,7 @@ import { getCCConfirmButtonPos } from './rendererUI.js';
 import { recalculateHex, recalculateHexInstant } from './positioning.js';
 import { save, load } from './saveLoad.js';
 import { initSetupSide, applyDiceRoll, placeFromPool, returnToPool, instantUnitMoveFromHexToHex, refreshSetupPanel } from './setupPhase.js';
+import { gameLog } from './gameLog.js';
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
@@ -196,6 +197,7 @@ const handlers = {
     DESELECT_ALL: () => {
         // если ждём выбор Woods-Road — отменяем, но MG не сбрасываем
         if (State.pendingMove) {
+            gameLog('ESC — Woods/Road choice cancelled');
             State.pendingMove = null;
             UIState.removeButton('UseWoods');
             UIState.removeButton('UseRoad');
@@ -203,6 +205,7 @@ const handlers = {
         }
         // Активная панель целей — Esc в первую очередь гасит её.
         if (State.lastGroupInteracted === 'targets') {
+            gameLog('ESC — target panel closed');
             State.lastGroupInteracted = null;
             UIState.hideTargetPanel();
             return;
@@ -210,6 +213,7 @@ const handlers = {
         // CCPh: Esc сбрасывает текущую не-подтверждённую VS-строку (пулы активной declaring стороны)
         // + снимает ccSelected со всех текущих выбранных. Confirm-нутые VS-строки не трогаем.
         if (PhaseManager.getPhase() === 'closeCombat' && State.ccSelectedIds.length > 0) {
+            gameLog('ESC — CC selection cleared');
             for (const uid of State.ccSelectedIds) {
                 State.setUnit(uid, 'ccSelected', false);
             }
@@ -227,6 +231,7 @@ const handlers = {
             return;
         }
         if (State.fireGroup.length > 0) {
+            gameLog('ESC — Fire Group cleared');
             for (const unitId of State.fireGroup) {
                 State.setUnit(unitId, 'inFireGroup', false);
             }
@@ -236,6 +241,7 @@ const handlers = {
             return;
         }
         if (State.movementGroup.length > 0) {
+            gameLog('ESC — Move Group cleared');
             // отмена деклараций AM/DT для юнитов которые ещё не двинулись
             for (const id of State.movementGroup) {
                 const u = State.units[id];
@@ -272,6 +278,7 @@ const handlers = {
         }
         // APh: сбросить выбранного для advance.
         if (State.advanceSelected) {
+            gameLog('ESC — advance selection cleared');
             State.setUnit(State.advanceSelected, 'selectedForAdvance', false);
             State.advanceSelected = null;
             return;
@@ -2974,6 +2981,8 @@ async function _apply_movement_result_in_State_for_all_MG(result, targetHex, ove
 
     Object.entries(result.unitChanges).forEach(([unitId, fields]) => {
         const u = State.units[unitId];
+        const fromHex = { col: u.hex.col, row: u.hex.row };   // источник ДО мутации
+        const prevMf  = _calc_mf_to_show_in_panel(u, State.movementGroup, State.units);   // панельный MF ДО мутации (с бонусами)
         const cost = Rules.checkCost(targetHex, u.hex, overrideTerrain);
         State.setUnit(unitId, 'mf_spent_in_current_hex', cost);
         State.setUnit(unitId, 'path',              [...u.path, { hex: targetHex, isRoad }]);
@@ -2983,6 +2992,8 @@ async function _apply_movement_result_in_State_for_all_MG(result, targetHex, ove
         State.setUnit(unitId, 'roadBonus',         fields.roadBonus);
         State.setUnit(unitId, 'hasStartedMoving',  fields.hasStartedMoving);
         State.setUnit(unitId, 'movementCompleted', fields.movementCompleted);
+        const newMf = _calc_mf_to_show_in_panel(u, State.movementGroup, State.units);     // панельный MF ПОСЛЕ мутации (с бонусами)
+        gameLog(`unit #${unitId} ${u.type} moved ${fromHex.col}-${fromHex.row} → ${targetHex.col}-${targetHex.row} (mf ${prevMf} → ${newMf})`);
 
         // Possessed carried едут с possessor'ом
         Object.values(State.units).forEach(w => {
@@ -3094,6 +3105,7 @@ function _addToMovementGroup(unitId) {
     }
     if (!State.movementGroup.includes(unitId)) {
         State.movementGroup.push(unitId);              // добавить в массив группы
+        gameLog(`unit #${unitId} ${unit.type} (${unit.hex.col}-${unit.hex.row}) added to Move Group`);
         _setInMovementGroup(unitId, true);             // поставить флаг на юнита + его possessed weapons
         _refreshMGButtons();                           // пересчитать кнопки MG (DoubleTime/Assault/Smoke/Drop/Recover)
         State.lastGroupInteracted = 'mg';              // пометить что последний клик был по MG
@@ -3151,6 +3163,7 @@ function _addToFireGroup(unitId) {
     }
     if (!State.fireGroup.includes(unitId)) {
         State.fireGroup.push(unitId);                               // добавить в массив группы
+        gameLog(`unit #${unitId} ${unit.type} (${unit.hex.col}-${unit.hex.row}) added to Fire Group`);
         State.setUnit(unitId, 'inFireGroup', true);                 // поднять флаг (рендерер нарисует рамку на юните)
         const key = `${unit.hex.col},${unit.hex.row}`;              // ключ hex'а для списка «гексов стрелков»
         if (!State.fireGroupHexesArray.some(h => `${h.col},${h.row}` === key)) {

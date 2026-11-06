@@ -5,6 +5,7 @@ import { PhaseManager } from './phase_manager.js';
 import * as renderer from './renderer.js';
 import { initPositioning, recalculateHex, restoreUnitZ } from './positioning.js';
 import { RendererUI } from './rendererUI.js';
+import { initGameLog, gameLog } from './gameLog.js';
 import { UIState } from './uiState.js';
 import { runFireSimulation } from './fireSimulation.js';
 import { runWoundSimulation } from './woundSimulation.js';
@@ -313,6 +314,8 @@ async function init() {
     stage.add(worldFxLayer);
     stage.add(uiLayer);
     RendererUI.init(uiLayer, worldFxLayer);
+    initGameLog(uiLayer);        // видимый лог игры (правый нижний угол, свёрнут)
+    window.gameLog = gameLog;    // доступ из консоли и из других модулей через window
 
     // Тёмная полоса под UI: от верха экрана до чуть ниже NextPhase. Кнопки/крутилка/значки
     // внутри uiLayer рендерятся поверх (полоса moveToBottom этого слоя); карта и юниты
@@ -424,6 +427,18 @@ async function init() {
             w, h,
         };
         interpreter.interpretLassoRelease(hexesInRect(rect));
+        worldFxLayer.batchDraw();
+    });
+
+    // mouseup вне canvas не долетает до stage — ловим на window чтобы снять рамку
+    window.addEventListener('mouseup', (e) => {
+        if (e.button !== 0) return;
+        if (!_dragStart) return;              // обычный случай: stage.on уже обработал и обнулил
+        if (_dragRectNode) {
+            _dragRectNode.destroy();
+            _dragRectNode = null;
+        }
+        _dragStart = null;
         worldFxLayer.batchDraw();
     });
 
