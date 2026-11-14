@@ -119,6 +119,115 @@ function calcFirepower(unit, targetHex) {
     return final;
 }
 
+// ===========================================================================
+// Тексты для лога (gameLog). На расчёт стрельбы не влияют — только собирают и пишут строки для окна лога.
+// ===========================================================================
+
+// Только для лога. Возвращает итоговый FP юнита + список причин (тегов) — «почему такой FP».
+function _fpBreakdownForLog(unit, targetHex) {
+    if (unit.broken)            return { fp: 0, reasons: ['broken'] };
+    if (unit.type === 'leader') return { fp: 0, reasons: ['leader'] };
+    const dist = hexDistance(unit.hex, targetHex);
+    const rng  = unit.range;
+    const reasons = [];
+    if (unit.pinned)                                       reasons.push('pinned');
+    if (unit.firingStatus === 'FirstFire')                 reasons.push('SFF');
+    if (unit.firingStatus === 'FinalFire')                 reasons.push('FPF');
+    if (PhaseManager.getPhase() === 'advancingFire')       reasons.push('AFPh');
+    if      (dist === 0)      reasons.push('TPBF');
+    else if (dist === 1)      reasons.push('PBF');
+    else if (dist <= rng)     reasons.push('normal range');
+    else if (dist <= rng * 2) reasons.push('long range');
+    else                      reasons.push('out of range');
+    if (PhaseManager.getPhase() === 'advancingFire'
+        && unit.underlinedFP && unit.type === 'squad' && dist <= rng) {
+        reasons.push('assault fire');
+    }
+    return { fp: calcFirepower(unit, targetHex), reasons };
+}
+
+// Только для лога. Пишет в лог стрелков по гексам: стрелки гекса, а сразу под последним из них — дальность и линия до цели.
+function _shootersByHexForLog(firegroupUnits, targetHex) {
+    const hexKeyOf = u => `${u.hex.col}-${u.hex.row}`;     // ключ гекса юнита, например "38-8"
+    // Сортируем по гексу, чтобы стрелки одного гекса шли подряд (порядок внутри гекса сохраняется)
+    const sorted = [...firegroupUnits].sort((a, b) => {
+        if (hexKeyOf(a) < hexKeyOf(b)) return -1;           // a должен стоять раньше b
+        if (hexKeyOf(a) > hexKeyOf(b)) return 1;            // a должен стоять позже b
+        return 0;                                           // гекс одинаковый — порядок не меняем
+    });
+
+    sorted.forEach((u, i) => {
+        const { fp, reasons } = _fpBreakdownForLog(u, targetHex);
+        gameLog(`    #${u.id} ${u.type}: fp=${fp} (${reasons.join(', ')})`);
+
+        const nextShooter = sorted[i + 1];                  // следующий стрелок в списке (у последнего в списке его нет)
+        // У последнего стрелка следующего нет, поэтому сначала проверяем, что он есть: иначе hexKeyOf(undefined) упадёт с ошибкой
+        const nextShooterInSameHex = nextShooter !== undefined && hexKeyOf(nextShooter) === hexKeyOf(u);
+        if (nextShooterInSameHex) return;                   // следующий стрелок в том же гексе — гекс ещё не закончился, линию пока не пишем
+
+        const seenSteps = new Set();                        // расстояния от стрелка, для которых гекс уже показан
+        const path = _hexLine(u.hex, targetHex)             // линия до цели, уже без отсеянных гексов
+            .filter(h => {
+                const step = hexDistance(u.hex, h);         // на каком шаге от стрелка стоит этот гекс
+                if (seenSteps.has(step)) return false;      // второй гекс пары на том же шаге — не показываем
+                seenSteps.add(step);
+                return true;
+            })
+            .map(h => `${h.col}-${h.row}`)
+            .join(' → ');
+        gameLog(`      range ${hexDistance(u.hex, targetHex)}: ${path}`);
+    });
+}
+
+// Только для лога. Из чего сложился TEM: тип местности цели, а если у неё TEM нет — Height Advantage.
+function _temTextForLog(targetHex, hexUnits, baseTem, ha) {
+    const terrain = terrainAt(targetHex.col, targetHex.row);          // типы местности в гексе цели
+    if (baseTem > 0) {
+        // Woods-Road: юнит выбрал UseWoods — считается лес (как в calcTEM)
+        if (terrain.includes('Woods-Road') && hexUnits.some(u => u.usedWoodsRoad)) return 'forest (Woods-Road)';
+        return terrain.filter(t => TEM[t] === baseTem).join(', ');    // типы местности, давшие именно этот TEM
+    }
+    if (ha > 0) return 'height advantage';                            // у местности TEM нет — работает Height Advantage
+    return terrain.length > 0 ? terrain.join(', ') : 'open ground';   // TEM нет совсем — просто показываем местность цели
+}
+
+// Только для лога. Причины Hindrance для одного гекса стрелков: список { text, value }.
+// Повторяет правила checkHindrance: дым — по всей линии, местность — только между стрелком и целью.
+function _hindrancePartsForLog(sHex, targetHex) {
+    const hexPath = _hexLine(sHex, targetHex);                        // линия от стрелка до цели
+    const parts = [];
+
+    for (const h of hexPath) {                                        // дым — в любом гексе линии, включая гекс стрелка и цели
+        const smokeDrm = terrainAt(h.col, h.row).map(s => SMOKE_DRM[s]).find(v => v);
+        if (!smokeDrm) continue;                                      // в этом гексе дыма нет
+        const value = isSameHex(h, sHex) ? 1 : smokeDrm;              // из дыма +1, сквозь дым и в дым — по таблице
+        parts.push({ text: `${h.col}-${h.row} smoke`, value });
+    }
+
+    if (_los_stays_on_road_in_Orchard(sHex, targetHex, hexPath)) return parts;   // дорога в саду: местность не считается
+
+    for (const h of hexPath) {                                        // местность — только между стрелком и целью
+        if (isSameHex(h, sHex) || isSameHex(h, targetHex)) continue;
+        const hindering = terrainAt(h.col, h.row).filter(t => HINDRANCE_TERRAINS.includes(t));   // типы местности гекса, дающие Hindrance
+        if (hindering.length > 0) parts.push({ text: `${h.col}-${h.row} ${hindering.join('+')}`, value: hindering.length });
+    }
+    return parts;
+}
+
+// Только для лога. Текст " (37-6 orchard +1, 37-5 smoke +2)" — причины Hindrance. Пустая строка, если Hindrance = 0.
+// Берём тот гекс стрелков, где сумма наибольшая: checkHindrance тоже берёт максимум по гексам стрелков.
+function _hindranceTextForLog(shooterHexes, targetHex) {
+    const sumOf = parts => parts.reduce((s, p) => s + p.value, 0);    // сумма Hindrance по списку причин
+    let worst = [];                                                   // причины самого «тяжёлого» гекса стрелков (пока пусто, сумма 0)
+    for (const sHex of shooterHexes) {
+        const parts = _hindrancePartsForLog(sHex, targetHex);
+        if (sumOf(parts) > sumOf(worst)) worst = parts;               // нашли гекс с большей суммой — запоминаем
+    }
+    if (worst.length === 0) return '';                                // Hindrance 0 — объяснять нечего
+    return ` (${worst.map(p => `${p.text} +${p.value}`).join(', ')})`;
+}
+// --- конец блока «тексты для лога» ---
+
 function calcTotalFirepower(units, targetHex) {
     return units.reduce((s, u) => s + calcFirepower(u, targetHex), 0);
 }
@@ -486,6 +595,30 @@ function _calc_malfunction(weaponsInFG, baseDr) {
         }
     });
     return broken;
+}
+
+// Выстрел «без LoS»: сам выстрел состоялся (counters поставятся вне этой функции),
+// но на цели эффекта не будет, из self-эффектов остаётся только breakdown weapon-ов.
+// Бросаем DR (без target-DRM, т.к. цели нет), проверяем B# у каждого carried-weapon в FG.
+// FPF Self-NMC здесь не нужен — он триггерится только при стрельбе в соседний гекс,
+// а в соседний гекс LoS гарантирован правилами, т.е. сюда не попадёт.
+export function breakdownCheckNoLoS(firegroupUnits) {
+    const coloredDie = 1 + Math.floor(Math.random() * 6);
+    const whiteDie   = 1 + Math.floor(Math.random() * 6);
+    const baseDr = coloredDie + whiteDie;
+    const weaponsInFG   = firegroupUnits.filter(u => u.category === 'carried');
+
+    console.log(`[fire noLoS] breakdown DR: ${coloredDie}+${whiteDie}=${baseDr}, weapons=[${weaponsInFG.map(w=>w.id).join(',')}]`);
+    gameLog(`Fire (no LoS): breakdown DR ${coloredDie}+${whiteDie}=${baseDr}`);
+
+    const brokenWeapons     = _calc_malfunction(weaponsInFG, baseDr);
+    const weaponsKeepingRoF = _calc_weapons_kept_RoF(weaponsInFG, coloredDie, brokenWeapons);
+    const changes = {};
+    for (const id of brokenWeapons) {
+        changes[id] = 'broken';
+        gameLog(`weapon #${id} malfunctioned (B# hit on DR ${baseDr})`);
+    }
+    return { changes, coloredDie, whiteDie, weaponsKeepingRoF };
 }
 
 // Возвращает массив id weapons, сохранивших RoF (не бампаем их firingStatus). Сломанные пропускаются.
@@ -1311,6 +1444,13 @@ function fireAttack(firegroupUnits, targetHex, hexUnits, units, orchardInSeason 
     console.log(`[fireAttack] TEM=${tem}, HINDRANCE=${hindrance}, FFNAM=${ffnam}, FFMO=${ffmo}, LEADER=${leadershipDRM}, totalDRM=${totalDRM}`);
 
     const { effect, baseDr, coloredDie, whiteDie } = calcFireEffect(firegroupUnits, targetHex, totalDRM);
+
+    gameLog(`  DR ${coloredDie}+${whiteDie}=${baseDr}`);
+    gameLog(`  DRM: TEM=${tem} (${_temTextForLog(targetHex, hexUnits, baseTem, ha)}), HINDRANCE=${hindrance}${_hindranceTextForLog(shooterHexes, targetHex)}, FFNAM=${ffnam}, FFMO=${ffmo}, LEADER=${leadershipDRM} → totalDRM=${totalDRM}`);
+    _shootersByHexForLog(firegroupUnits, targetHex);       // юниты по гексам, под каждой группой — дальность и линия
+    gameLog(`    total FP=${totalFP}`);                     // сумма по подгруппе — по ней выбирается колонка таблицы огня
+    gameLog(`  → effect: ${effect || 'None'}`);
+
     const changes = applyFireEffect(effect, hexUnits);
 
     // B# (malfunction) и RoF (сохранение статуса) для weapons в FG
@@ -1660,6 +1800,15 @@ export const Rules = {
             return false;
         }
 
+        // PFPh: юнит, уже отстрелявшийся в этой PFPh, стрелять повторно не может.
+        // Weapon, удержавший RoF (prepFired=false), сюда не попадёт и сможет стрельнуть снова.
+        if (PhaseManager.getPhase() === 'prepFire') {
+            if (unit.prepFired) {
+                gameLog(`unit #${unit.id} ${unit.type} cannot be added to Fire Group — already fired in PFPh`);
+                return false;
+            }
+        }
+
         // AFPh (Advancing Fire) ограничения:
         //   — юнит, стрелявший в PFPh (prepFired) — не может.
         //   — юнит, уже стрелявший в AFPh (advFired) — не может ("no weapon fires more than once").
@@ -1883,6 +2032,7 @@ export const Rules = {
     residualAttack,
     filter_hexes_with_Los,
     array_of_adjacent_Hexes_arrays,
+    breakdownCheckNoLoS,
     hexInList: _hexInList,
 
     arrangeMovement(ctx) {

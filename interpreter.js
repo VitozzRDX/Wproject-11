@@ -725,7 +725,7 @@ export function interpretLassoRelease(hexes) {
             const atk = unitsInHex.find(u => u.side === 'attacker');
             const def = unitsInHex.find(u => u.side === 'defender');
             if (atk) Engine.handlers.dblClickAddingToMovingGroup(atk);
-            if (def) Engine.handlers.dblClickAddingToFireGroup(def);
+            if (def && State.mfspent) Engine.handlers.dblClickAddingToFireGroup(def);   // DFF доступен только после траты MF аттакером
         } else if (phase === 'prepFire' || phase === 'defensiveFire' || phase === 'advancingFire') {
             const firingSide = (phase === 'prepFire' || phase === 'advancingFire') ? 'attacker' : 'defender';
             const anyFiring = unitsInHex.find(u => u.side === firingSide);

@@ -2446,9 +2446,34 @@ function _finalizeRoutState() {
     State.routingUnit = null;
 }
 
+// Строка итога по одной подгруппе FG (или по всей FG в no-LoS сценарии).
+function _logFireOutcome(shooters, targets, targetHex, inLoS) {
+    const fg  = shooters.map(u => `#${u.id} ${u.type}`).join(', ');
+    const tgt = targets.map(u => `#${u.id} ${u.type}`).join(', ') || '(no targets)';
+    const los = inLoS ? 'in LoS' : 'not in LoS';
+    gameLog(`Fire Group (${fg}) shoot at Targets (${tgt}) in hex ${targetHex.col}-${targetHex.row}. Targets are ${los}.`);
+}
+
+// Общий блок для случая «выстрел без LoS»: breakdown weapons + визуал (кубы + MG shake).
+async function _handleNoLoSBreakdown(firegroupUnits, weaponsKeepingRoF) {
+    //gameLog('Fire attempt without LoS from any shooter — checking weapon breakdown only');
+    const r = Rules.breakdownCheckNoLoS(firegroupUnits);
+    UIState.showDice(r.coloredDie, r.whiteDie);
+    for (const u of firegroupUnits) if (u.category === 'carried' && u.mgClass) shakeNode(u.node);
+    for (const id of r.weaponsKeepingRoF) weaponsKeepingRoF.add(id);
+    await _apply_changes_for_targets(r.changes);
+}
+
 async function _handleFire(ctx) {
     const targetHex = pixelToHex(ctx.pos.x, ctx.pos.y);
     const phase = PhaseManager.getPhase();
+
+    // старт попытки выстрела — ещё до предпроверок (может быть отменён ниже)
+    const fgList = State.fireGroup.map(id => {
+        const u = State.units[id];
+        return `#${id} ${u.type}`;
+    }).join(', ');
+    gameLog(`Fire: [${fgList}] → ${targetHex.col}-${targetHex.row}`);
 
     console.log(`[Fire attempt] ${phase} → target (${targetHex.col},${targetHex.row}), fg=[${State.fireGroup.join(',')}]`);
 
@@ -2464,6 +2489,7 @@ async function _handleFire(ctx) {
         return [];
     };
     const initialTargetUids = getPhaseTargets().map(u => u.id);
+    const initialTargets    = initialTargetUids.map(id => State.units[id]).filter(Boolean);
     const beforeSnap        = _snapshotTargetsBeforeFireEffect(initialTargetUids);
 
     // Отсеиваем стрелков без LoS/hindrance≥6 → validHexes. Затем bins по adjacency → subFGsArray.
@@ -2472,12 +2498,9 @@ async function _handleFire(ctx) {
     if (validHexes.length === 0) { console.log('No los from any fg unit . Firing still is pending');  }
     const subFGsArray = _form_sub_Fire_Groups(firegroupUnits, validHexes);
 
-    // Визуал LoS-линий и точки блока (даже если атака abort'нется дальше).
+    // Логирование итогов фильтрации LoS; сама отрисовка — ниже, внутри каждой фазы ПОСЛЕ её предпроверок,
+    // чтобы не оставлять линии на экране если выстрел отменён (SFF/FPF/empty targets и т.п.).
     console.log(`Из ${State.fireGroupHexesArray.length} гексовой фг ${validHexes.length} гексов имеют Лос`);
-
-    _drawLOS(State.fireGroupHexesArray, targetHex, validHexes);
-    const hit = getLastHit();   // возвращает пиксельные координаты + тип препятствия, где последний checkLOS упёрся в блокер
-    UIState.flashHitPoints(hit ? [hit] : []);
 
     switch (phase) {
         // ============================================================
@@ -2490,20 +2513,48 @@ async function _handleFire(ctx) {
             const getTargets = () => _movedTargetsInHex(targetHex);
             if (getTargets().length === 0) {
                 console.log(`[Fire] В (${targetHex.col},${targetHex.row}) нет свежедвинувшихся целей — юниты закончили движение ранее, DFF невозможен.`);
+                gameLog('Fire aborted: no freshly moved targets in hex (DFF not applicable)');
                 return;
             }
 
             // 3.2.2 (same-hex FG unity) + 3.3.3 (shots ≤ MF цели). Логи внутри функций.
-            if (Rules.check_separate_attack(getTargets(), firegroupUnits, State.fired_from_on_target_in_hex)) return;
-            if (Rules.check_shots_exceed_mf(getTargets(), firegroupUnits, State.fired_from_on_target_in_hex)) return;
+            if (Rules.check_separate_attack(getTargets(), firegroupUnits, State.fired_from_on_target_in_hex)) {
+                gameLog('Fire aborted: 3.2.2 — same-hex FG cannot split attacks across moving targets');
+                return;
+            }
+            if (Rules.check_shots_exceed_mf(getTargets(), firegroupUnits, State.fired_from_on_target_in_hex)) {
+                gameLog('Fire aborted: 3.3.3 — shots exceed target MF');
+                return;
+            }
             // SFF/FPF preconditions на всей FG — нарушение одного → отмена всей атаки.
-            if (!Rules.checkSFFValid(firegroupUnits, targetHex, State.units, State.orchardInSeason)) return;
-            if (!Rules.checkFPFValid(firegroupUnits, targetHex)) return;
+            if (!Rules.checkSFFValid(firegroupUnits, targetHex, State.units, State.orchardInSeason)) {
+                gameLog('Fire aborted: SFF rule violated (precondition failed)');
+                return;
+            }
+            if (!Rules.checkFPFValid(firegroupUnits, targetHex)) {
+                gameLog('Fire aborted: FPF rule violated (precondition failed)');
+                return;
+            }
+
+            // все предпроверки пройдены — рисуем LoS и точки блока
+            _drawLOS(State.fireGroupHexesArray, targetHex, validHexes);
+            UIState.flashHitPoints(getLastHit() ? [getLastHit()] : []);
+
+            // стрелки без LoS — hex не в validHexes; логируем всех таких (включая partial case, когда часть FG без LoS)
+            const noLoSShooters = firegroupUnits.filter(u =>
+                !validHexes.some(h => h.col === u.hex.col && h.row === u.hex.row));
+            if (noLoSShooters.length > 0) {
+                _logFireOutcome(noLoSShooters, initialTargets, targetHex, false);
+            }
+            // breakdown для всех стрелков без LoS (включая partial case, где только часть FG без LoS)
+            if (noLoSShooters.length > 0) await _handleNoLoSBreakdown(noLoSShooters, weaponsKeepingRoF);
 
             for (const subFG of subFGsArray) {
-                
+
                 const targets = getTargets();
                 if (targets.length === 0) break;
+
+                _logFireOutcome(subFG, targets, targetHex, true);
 
                 console.log(`[${phase}] sub-FG units=${subFG.map(u=>u.id).join(',')}`);
                 const result = Rules.fireAttack(subFG, targetHex, targets, State.units, State.orchardInSeason);
@@ -2525,12 +2576,30 @@ async function _handleFire(ctx) {
         // ============================================================
         case 'prepFire': {
             const getTargets = () => _defenderInfantryInHex(targetHex);
-            if (getTargets().length === 0) return;
+            if (getTargets().length === 0) {
+                gameLog('Fire aborted: no defender infantry in hex');
+                return;
+            }
+
+            // целей хватает — рисуем LoS и точки блока
+            _drawLOS(State.fireGroupHexesArray, targetHex, validHexes);
+            UIState.flashHitPoints(getLastHit() ? [getLastHit()] : []);
+
+            // стрелки без LoS — hex не в validHexes; логируем всех таких (включая partial case, когда часть FG без LoS)
+            const noLoSShooters = firegroupUnits.filter(u =>
+                !validHexes.some(h => h.col === u.hex.col && h.row === u.hex.row));
+            if (noLoSShooters.length > 0) {
+                _logFireOutcome(noLoSShooters, initialTargets, targetHex, false);
+            }
+            // breakdown для всех стрелков без LoS (включая partial case, где только часть FG без LoS)
+            if (noLoSShooters.length > 0) await _handleNoLoSBreakdown(noLoSShooters, weaponsKeepingRoF);
 
             // Никаких SFF/FPF/illegal_targets — цель не двигается, эти правила неприменимы.
             for (const subFG of subFGsArray) {
                 const targets = getTargets();
                 if (targets.length === 0) break;
+
+                _logFireOutcome(subFG, targets, targetHex, true);
 
                 console.log(`[${phase}] sub-FG units=${subFG.map(u=>u.id).join(',')}`);
                 const result = Rules.fireAttack(subFG, targetHex, targets, State.units, State.orchardInSeason);
@@ -2553,11 +2622,29 @@ async function _handleFire(ctx) {
         // ============================================================
         case 'advancingFire': {
             const getTargets = () => _defenderInfantryInHex(targetHex);
-            if (getTargets().length === 0) return;
+            if (getTargets().length === 0) {
+                gameLog('Fire aborted: no defender infantry in hex');
+                return;
+            }
+
+            // целей хватает — рисуем LoS и точки блока
+            _drawLOS(State.fireGroupHexesArray, targetHex, validHexes);
+            UIState.flashHitPoints(getLastHit() ? [getLastHit()] : []);
+
+            // стрелки без LoS — hex не в validHexes; логируем всех таких (включая partial case, когда часть FG без LoS)
+            const noLoSShooters = firegroupUnits.filter(u =>
+                !validHexes.some(h => h.col === u.hex.col && h.row === u.hex.row));
+            if (noLoSShooters.length > 0) {
+                _logFireOutcome(noLoSShooters, initialTargets, targetHex, false);
+            }
+            // breakdown для всех стрелков без LoS (включая partial case, где только часть FG без LoS)
+            if (noLoSShooters.length > 0) await _handleNoLoSBreakdown(noLoSShooters, weaponsKeepingRoF);
 
             for (const subFG of subFGsArray) {
                 const targets = getTargets();
                 if (targets.length === 0) break;
+
+                _logFireOutcome(subFG, targets, targetHex, true);
 
                 console.log(`[${phase}] sub-FG units=${subFG.map(u=>u.id).join(',')}`);
                 const result = Rules.fireAttack(subFG, targetHex, targets, State.units, State.orchardInSeason);
@@ -2576,15 +2663,36 @@ async function _handleFire(ctx) {
         // ============================================================
         case 'defensiveFire': {
             const getTargets = () => _attackerInfantryInHex(targetHex);
-            if (getTargets().length === 0) return;
+            if (getTargets().length === 0) {
+                gameLog('Fire aborted: no attacker infantry in hex');
+                return;
+            }
 
             // FirstFire → только adjacent/same. Нарушение любого юнита → отмена всей атаки.
             // FinalFire уже отсечён на addToFireGroup (rules.checkIfAddingToFireGroupIsValid).
-            if (!Rules.checkDFPhFinalFireValid(firegroupUnits, targetHex)) return;
+            if (!Rules.checkDFPhFinalFireValid(firegroupUnits, targetHex)) {
+                gameLog('Fire aborted: Final Fire rule violated (precondition failed)');
+                return;
+            }
+
+            // предпроверки пройдены — рисуем LoS и точки блока
+            _drawLOS(State.fireGroupHexesArray, targetHex, validHexes);
+            UIState.flashHitPoints(getLastHit() ? [getLastHit()] : []);
+
+            // стрелки без LoS — hex не в validHexes; логируем всех таких (включая partial case, когда часть FG без LoS)
+            const noLoSShooters = firegroupUnits.filter(u =>
+                !validHexes.some(h => h.col === u.hex.col && h.row === u.hex.row));
+            if (noLoSShooters.length > 0) {
+                _logFireOutcome(noLoSShooters, initialTargets, targetHex, false);
+            }
+            // breakdown для всех стрелков без LoS (включая partial case, где только часть FG без LoS)
+            if (noLoSShooters.length > 0) await _handleNoLoSBreakdown(noLoSShooters, weaponsKeepingRoF);
 
             for (const subFG of subFGsArray) {
                 const targets = getTargets();
                 if (targets.length === 0) break;
+
+                _logFireOutcome(subFG, targets, targetHex, true);
 
                 console.log(`[${phase}] sub-FG units=${subFG.map(u=>u.id).join(',')}`);
                 const result = Rules.fireAttack(subFG, targetHex, targets, State.units, State.orchardInSeason);
@@ -2656,7 +2764,9 @@ function _set_firing_Status(phase, firegroupUnits, weaponsKeepingRoF) {
     } else if (phase === 'prepFire') {
         // PFPh (ASL 3.2.5): после резолва атаки — пометить юнит prepFired + снять CX counter.
         // Правило: "remove CX counter [if any] from firing unit".
+        // Weapon, удержавший RoF, маркер prepFired НЕ получает — может стрельнуть снова в этой же PFPh.
         firegroupUnits.forEach(u => {
+            if (weaponsKeepingRoF.has(u.id)) return;
             State.setUnit(u.id, 'prepFired', true);
             if (u.category !== 'carried') State.setUnit(u.id, 'exhausted', false);
         });
@@ -2858,6 +2968,9 @@ function _replace_unit(oldId, newTemplateId, newId) {
 // применить changes от fireAttack: { unitId: 'broken'|'pinned'|'eliminated'|'reduced'|'wounded' }
 async function _apply_changes_for_targets(changes) {
     for (const [id, state] of Object.entries(changes)) {
+        // Лог: что именно изменилось (цель/оружие → новый статус).
+        const _u = State.units[id];
+        if (_u) gameLog(`  ${_u.category === 'carried' ? 'weapon' : 'target'} #${id} ${_u.type}: → ${state}`);
         // eliminated — юнит уничтожается физически (KIA-визуал + пауза + remove)
         if (state === 'eliminated') {
             const u = State.units[id];
@@ -3033,13 +3146,31 @@ function _create_splitted_group_in_State(mg) {
     if (State.original_group.length > 1 &&
         mg.every(id => State.original_group.includes(id))) {
         State.splitted_group = State.original_group.filter(id => !mg.includes(id));
+        _finalize_zero_mf_in_splitted_group();
         return;
     }
     // субсет splitted_group → ещё дробим
     if (State.splitted_group.length > 1 &&
         mg.every(id => State.splitted_group.includes(id))) {
         State.splitted_group = State.splitted_group.filter(id => !mg.includes(id));
+        _finalize_zero_mf_in_splitted_group();
         return;
+    }
+}
+
+// Юниты в splitted_group, у которых эффективный MF стал 0 (например, squad потерял leaderBonus
+// после отделения лидера), не могут двигаться — финализируем их на месте.
+function _finalize_zero_mf_in_splitted_group() {
+    for (const id of State.splitted_group) {
+        const u = State.units[id];
+        if (u.movementCompleted) continue;
+        const effMf = _calc_mf_to_show_in_panel(u, State.splitted_group, State.units);
+        if (effMf <= 0) {
+            State.setUnit(id, 'mf', 0);
+            State.setUnit(id, 'movementCompleted', true);
+            _setInMovementGroup(id, false);
+            gameLog(`unit #${id} ${u.type} movement completed — no effective MF left after split`);
+        }
     }
 }
 
