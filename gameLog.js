@@ -1,5 +1,6 @@
 // Видимый лог игры: прозрачное окно в правом нижнем углу.
 // Клик по заголовку — свернуть/развернуть. По умолчанию свёрнуто.
+// Кнопка [copy] в заголовке копирует весь лог сессии в буфер обмена.
 // API: initGameLog(uiLayer), gameLog(msg).
 // Konva подключён глобально через <script> в index.html, импорта не нужно.
 
@@ -8,20 +9,21 @@ const LOG_H         = 220;   // высота развёрнутого окна (
 const HEADER_H      = 20;    // высота полосы заголовка
 const LINE_H        = 14;    // шаг строки
 const MARGIN        = 6;     // отступ от края экрана
-const MAX_LINES     = 200;   // храним историю, рисуем влезающие снизу
+const MAX_SHOWN     = 200;   // сколько последних сообщений показываем и прокручиваем в окне; в buffer хранится весь лог сессии
 const COLLAPSED_SHIFT_Y = 160; // когда свёрнуто, планка «▸ Log» опускается вниз на столько px
 
 let group     = null;        // корневая группа лога
 let bodyRect  = null;        // прозрачный фон тела (видим только когда развёрнуто)
 let headerBg  = null;        // полоса заголовка (всегда видна)
 let headerTxt = null;        // текст заголовка со стрелкой
+let copyTxt   = null;        // кнопка «copy» в заголовке
 let linesGrp  = null;        // группа текстовых строк
 let layerRef  = null;        // uiLayer для batchDraw
 let expanded  = false;       // текущее состояние
 let scrollOffsetPx = 0;      // на сколько px «отмотано» вверх от самой свежей строки (0 = прижато к низу)
 let scrollBar = null;        // индикатор прокрутки (вертикальная полоска у правого края)
 let baseY     = 0;           // базовая Y развёрнутого окна (сохраняем для toggle)
-const buffer  = [];          // кольцевой буфер сообщений
+const buffer  = [];          // весь лог сессии: по строке на сообщение
 
 export function initGameLog(uiLayer) {
     layerRef = uiLayer;
@@ -56,6 +58,15 @@ export function initGameLog(uiLayer) {
         fill: '#ddd',
     });
 
+    // Кнопка «copy» справа в заголовке: копирует весь лог в буфер обмена.
+    copyTxt = new Konva.Text({
+        x: LOG_W - 84, y: 0,
+        width: 80, padding: 4, align: 'right',   // высота кнопки равна высоте заголовка; фиксированная ширина, чтобы подпись «copied» не сдвигала её
+        text: '[copy]',
+        fontFamily: 'monospace', fontSize: 12,
+        fill: '#9cf',
+    });
+
     // Группа строк — внутри тела, clip по размеру тела.
     linesGrp = new Konva.Group({
         x: 6, y: HEADER_H + 4,
@@ -72,7 +83,7 @@ export function initGameLog(uiLayer) {
         visible: false,          // показываем только когда есть что скроллить
     });
 
-    group.add(bodyRect, headerBg, headerTxt, linesGrp, scrollBar);
+    group.add(bodyRect, headerBg, headerTxt, copyTxt, linesGrp, scrollBar);
 
     // Клик по заголовку (фону или тексту) — тогглим состояние.
     const toggle = () => {
@@ -85,8 +96,12 @@ export function initGameLog(uiLayer) {
         if (expanded) _rebuildLines();
         layerRef.batchDraw();
     };
-    headerBg.on('click', toggle);
-    headerTxt.on('click', toggle);
+
+    // Клик по заголовку не должен доходить до карты (иначе попытка хода): гасим всплытие только у элементов заголовка
+    const headerClick = (action) => (e) => { e.cancelBubble = true; action(); };
+    headerBg.on('click',  headerClick(toggle));
+    headerTxt.on('click', headerClick(toggle));
+    copyTxt.on('click',   headerClick(_copyLog));
 
     // прокрутка колесом над окном лога (вешаем на группу, чтобы ловить над любым узлом внутри)
     group.on('wheel', (e) => {
@@ -105,7 +120,6 @@ export function initGameLog(uiLayer) {
 export function gameLog(msg) {
     const line = typeof msg === 'string' ? msg : String(msg);
     buffer.push(line);
-    if (buffer.length > MAX_LINES) buffer.shift();
     scrollOffsetPx = 0;                  // новое сообщение → прыгаем к низу (вариант B)
     if (expanded && linesGrp) {
         _rebuildLines();
@@ -118,14 +132,15 @@ export function gameLog(msg) {
 function _rebuildLines() {
     linesGrp.destroyChildren();
     const bodyH = LOG_H - HEADER_H - 8;
+    const shown = buffer.slice(-MAX_SHOWN);   // в окне — последние сообщения, чтобы перерисовка не дорожала с ростом лога
 
     // прогон 1: создаём все ноды в памяти, замеряем каждую, считаем totalH
     const nodes = [];
     let totalH = 0;
-    for (let i = 0; i < buffer.length; i++) {
+    for (let i = 0; i < shown.length; i++) {
         const t = new Konva.Text({
             x: 0, y: 0,            // y поставим в прогоне 2
-            text: buffer[i],
+            text: shown[i],
             fontFamily: 'monospace', fontSize: 11,
             fill: '#eee',
             width: LOG_W - 12,
@@ -162,4 +177,26 @@ function _rebuildLines() {
         scrollBar.height(barH);
         scrollBar.visible(true);
     }
+}
+
+// Копирует весь лог сессии в буфер обмена (по строке на сообщение) и на секунду показывает результат на кнопке.
+function _copyLog() {
+    if (!navigator.clipboard) {                    // буфер обмена доступен только на localhost / https
+        _flashCopyLabel('copy failed');
+        return;
+    }
+    navigator.clipboard.writeText(buffer.join('\n')).then(
+        () => _flashCopyLabel('copied'),
+        () => _flashCopyLabel('copy failed')
+    );
+}
+
+// Меняет подпись кнопки на секунду, потом возвращает «[copy]».
+function _flashCopyLabel(text) {
+    copyTxt.text(text);
+    layerRef.batchDraw();
+    setTimeout(() => {
+        copyTxt.text('[copy]');
+        layerRef.batchDraw();
+    }, 1000);
 }

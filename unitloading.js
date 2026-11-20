@@ -52,7 +52,7 @@ const Infantry         = { ...Unit, category: 'infantry',
                                     dmRemovalHighlight: false, // подсветка — DM будет снят на NextPhase (RPh step h)
                                     DMkept: false };           // игрок кликнул по подсвеченному → DM остаётся
 const Squad            = { ...Infantry, type: 'squad', mf: 4, leaderBonus: 2, firingStatus: ' ', ipc: 3 };   // MMC
-const Leader           = { ...Infantry, type: 'leader', mf: 6, quality: 'Elite', ipc: 1 };                    // SMC
+const Leader           = { ...Infantry, type: 'leader', mf: 6, quality: 'Elite', ipc: 1, directedFirers: null, firingStatus: ' ' };                    // SMC
 const GermanSquad_1st   = { ...Squad,  nation: 'german',   quality: '1stLine' };
 const SovietSquad_Elite = { ...Squad,  nation: 'soviet',   quality: 'Elite'   };
 const AmericanSquad     = { ...Squad,  nation: 'american', quality: 'Elite'   };

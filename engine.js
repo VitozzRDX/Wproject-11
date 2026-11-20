@@ -597,6 +597,7 @@ const handlers = {
         UIState.fadeButton('EndDefenderRepair');
         UIState.addButton('EndAttackerTransfer', { x: 10, y: 200, label: 'EndAttackerTransfer' });
         console.log('[RPh] attacker transfer starts');
+        gameLog('Rally: attacker Transfer');
     },
 
     SelectRepairHex: (ctx) => {
@@ -629,11 +630,14 @@ const handlers = {
             if (result === 'repaired') {
                 State.setUnit(weapon.id, 'broken', false);
                 console.log(`[Repair] ${possessor.id} repaired ${weapon.id} (dr=${dr})`);
+                gameLog(`    Repair #${weapon.id} ${weapon.type}: dr ${dr} <= repair number ${weapon.repairNumber} → repaired by #${possessor.id}`);
             } else if (result === 'eliminated') {
                 console.log(`[Repair] ${weapon.id} permanently eliminated (dr=6)`);
+                gameLog(`    Repair #${weapon.id} ${weapon.type}: dr 6 → permanently eliminated`);
                 await _killUnit(weapon.id, { cause: 'repair', hex: weapon.hex });
             } else {
                 console.log(`[Repair] ${possessor.id} failed to repair ${weapon.id} (dr=${dr})`);
+                gameLog(`    Repair #${weapon.id} ${weapon.type}: dr ${dr} > repair number ${weapon.repairNumber} → failed`);
             }
         }
         _clearRepairState();
@@ -676,11 +680,13 @@ const handlers = {
                 State.setUnit(weapon.id, 'possessorId', u.id);
                 recalculateHex(weapon.hex);
                 console.log(`[Recovery] ${u.id} recovered ${weapon.id}`);
+                gameLog(`    #${u.id} ${u.type} recovered weapon #${weapon.id}`);
                 recovered = true;
                 break;
             }
         }
         if (!recovered) console.log(`[Recovery] all units failed in hex (${State.recoveryHex.col},${State.recoveryHex.row})`);
+        if (!recovered) gameLog(`    nobody recovered weapon #${weapon.id} in hex ${State.recoveryHex.col}-${State.recoveryHex.row}`);
         _clearRecoveryState();
         _refreshRecoveryHighlights();
         _autoEndRecoveryIfNoneLeft();
@@ -695,6 +701,7 @@ const handlers = {
         UIState.fadeButton('EndAttackerTransfer');
         UIState.addButton('EndDefenderTransfer', { x: 160, y: 200, label: 'EndDefenderTransfer' });
         console.log('[RPh] defender transfer starts');
+        gameLog('Rally: defender Transfer');
     },
 
     EndDefenderTransfer: () => {
@@ -756,6 +763,7 @@ const handlers = {
         State.setUnit(ctx.unitId, 'dmRemovalHighlight', false);
         State.setUnit(ctx.unitId, 'DMkept', true);
         console.log(`[RPh DM] ${ctx.unitId} opt-keep DM`);
+        gameLog(`    #${ctx.unitId} ${State.units[ctx.unitId].type}: keeps DM`);
     },
 
     SelectUnitRallyUnit: (ctx) => {
@@ -778,9 +786,11 @@ const handlers = {
 
         if (pass) {
             State.setUnit(u.id, 'broken', false);
+            if (u.desperationMorale) gameLog(`    #${u.id} ${u.type}: DM removed`);
             if (u.desperationMorale) State.setUnit(u.id, 'desperationMorale', false);
         } else if (originalTwelve) {
             console.log(`[UnitRally] ${u.id} original 12 → CR`);
+            gameLog(`    #${u.id} ${u.type}: original 12 → Casualty Reduction`);
             if (u.halfSquad) _replace_unit(u.id, u.halfSquad, u.id);
             else             await _killUnit(u.id, { cause: 'rally-cr', hex: u.hex });
         }
@@ -797,10 +807,12 @@ const handlers = {
 
         if (pass) {
             State.setUnit(u.id, 'broken', false);
+            if (u.desperationMorale) gameLog(`    #${u.id} ${u.type}: DM removed`);
             if (u.desperationMorale) State.setUnit(u.id, 'desperationMorale', false);
         } else if (originalTwelve) {
             // Casualty Reduction: squad → HS, HS/leader → eliminated.
             console.log(`[SelfRally] ${u.id} original 12 → CR`);
+            gameLog(`    #${u.id} ${u.type}: original 12 → Casualty Reduction`);
             if (u.halfSquad) _replace_unit(u.id, u.halfSquad, u.id);
             else             await _killUnit(u.id, { cause: 'rally-cr', hex: u.hex });
         }
@@ -920,6 +932,7 @@ const handlers = {
                 if (u.DMkept) continue;
                 State.setUnit(u.id, 'desperationMorale', false);
                 console.log(`[RPh DM] ${u.id} DM removed`);
+                gameLog(`    #${u.id} ${u.type}: DM removed`);
             }
             for (const u of Object.values(State.units)) {
                 if (u.dmRemovalHighlight) State.setUnit(u.id, 'dmRemovalHighlight', false);
@@ -1008,6 +1021,7 @@ const handlers = {
                 if (u.firingStatus !== undefined && u.firingStatus !== ' ') {
                     State.setUnit(u.id, 'firingStatus', ' ');
                 }
+                if (u.directedFirers) State.setUnit(u.id, 'directedFirers', null);   // правило 3.4: новый Player Turn, руководство лидера свободно
             }
             console.log('[DFPh end] cleared First/Final Fire counters');
         }
@@ -1886,6 +1900,7 @@ function _applyTransferIfReady() {
     State.setUnit(State.idTransferSelectedUnit, 'possessorId', State.idUnitToGetWeapon);
     recalculateHex(w.hex);   // пересобрать стек (weapon теперь под новым possessor'ом)
     console.log(`[RPh] weapon ${State.idTransferSelectedUnit} → ${State.idUnitToGetWeapon}`);
+    gameLog(`    weapon #${State.idTransferSelectedUnit} ${w.type} transferred to #${State.idUnitToGetWeapon}`);
     _clearTransferSelection();
     _refreshTransferPanel();
 }
@@ -1924,11 +1939,13 @@ function _enterRecoveryForCurrentSide() {
     const hasAny = Object.values(State.units).some(w => w.category === 'carried' && w.recoveryHighlight);
     if (!hasAny) {
         console.log(`[RPh] ${State.rallySide} recovery: nothing to recover, auto-skip`);
+        gameLog(`Rally: ${State.rallySide} Recovery — nothing to recover, skipped`);
         if (State.rallySide === 'attacker') handlers.EndAttackerRecovery();
         else                                 handlers.EndDefenderRecovery();
         return;
     }
     console.log(`[RPh] ${State.rallySide} recovery starts`);
+    gameLog(`Rally: ${State.rallySide} Recovery`);
 }
 
 // Полная очистка recoveryHighlight у всех weapons — при переходе из recovery-подфазы наружу.
@@ -2023,6 +2040,7 @@ function _enterDMRemoval() {
     const candidates = Object.values(State.units).filter(_isDMRemovalCandidate);
     for (const u of candidates) State.setUnit(u.id, 'dmRemovalHighlight', true);
     console.log(`[RPh DM] ${candidates.length} units highlighted — click to keep DM, NextPhase removes rest`);
+    gameLog(`Rally: DM removal — ${candidates.length} unit(s) can keep DM (click them), the rest lose DM at NextPhase`);
 }
 
 // Если после попытки SelfRally никого не осталось в highlight — автоматом завершаем подфазу стороны.
@@ -2043,11 +2061,13 @@ function _enterSelfRallyForCurrentSide() {
     const hasAny = Object.values(State.units).some(u => u.category === 'infantry' && u.selfRallyHighlight);
     if (!hasAny) {
         console.log(`[RPh] ${State.rallySide} self-rally: nothing to rally, auto-skip`);
+        gameLog(`Rally: ${State.rallySide} Self-Rally — nobody to rally, skipped`);
         if (State.rallySide === 'attacker') handlers.EndAttackerSelfRally();
         else                                 handlers.EndDefenderSelfRally();
         return;
     }
     console.log(`[RPh] ${State.rallySide} self-rally starts`);
+    gameLog(`Rally: ${State.rallySide} Self-Rally`);
 }
 
 // Юнит eligible для unit-rally: broken, свой, не израсходовал action, не-лидер,
@@ -2097,11 +2117,13 @@ function _enterUnitRallyForCurrentSide() {
     const hasAny = Object.values(State.units).some(u => u.category === 'infantry' && u.unitRallyHighlight);
     if (!hasAny) {
         console.log(`[RPh] ${State.rallySide} unit-rally: nothing to rally, auto-skip`);
+        gameLog(`Rally: ${State.rallySide} Unit Rally — nobody to rally, skipped`);
         if (State.rallySide === 'attacker') handlers.EndAttackerUnitRally();
         else                                 handlers.EndDefenderUnitRally();
         return;
     }
     console.log(`[RPh] ${State.rallySide} unit-rally starts`);
+    gameLog(`Rally: ${State.rallySide} Unit Rally`);
 }
 
 // Если после попытки Repair не осталось подсвеченных weapon'ов — auto-end подфазы стороны.
@@ -2126,11 +2148,13 @@ function _enterRepairForCurrentSide() {
     );
     if (!hasAnyEligible) {
         console.log(`[RPh] ${State.rallySide} repair: nothing to repair, auto-skip`);
+        gameLog(`Rally: ${State.rallySide} Repair — nothing to repair, skipped`);
         if (State.rallySide === 'attacker') handlers.EndAttackerRepair();
         else                                 handlers.EndDefenderRepair();
         return;
     }
     console.log(`[RPh] ${State.rallySide} repair starts`);
+    gameLog(`Rally: ${State.rallySide} Repair`);
 }
 
 // Помечает хекс как CC-hex если там есть enemy infantry (после Advance-хода).
@@ -2454,6 +2478,17 @@ function _logFireOutcome(shooters, targets, targetHex, inLoS) {
     gameLog(`Fire Group (${fg}) shoot at Targets (${tgt}) in hex ${targetHex.col}-${targetHex.row}. Targets are ${los}.`);
 }
 
+// Правило 3.4: первое руководство лидера в этот Player Turn запоминаем — дальше он может руководить только теми же стрелками.
+function _recordLeaderDirection(group, directingLeaderIds) {
+    const firers = group.filter(u => u.type !== 'leader').map(u => u.id);   // стрелки группы без лидеров
+    if (firers.length === 0) return;                                        // стрелков нет — выстрела не было
+    for (const leader of Rules.directingLeaders(group)) {
+        directingLeaderIds.add(leader.id);                                  // руководил в этом выстреле — получит маркер First/Final Fire
+        if (leader.directedFirers) continue;                                // уже связан со своей первой группой
+        State.setUnit(leader.id, 'directedFirers', firers);
+    }
+}
+
 // Общий блок для случая «выстрел без LoS»: breakdown weapons + визуал (кубы + MG shake).
 async function _handleNoLoSBreakdown(firegroupUnits, weaponsKeepingRoF) {
     //gameLog('Fire attempt without LoS from any shooter — checking weapon breakdown only');
@@ -2480,6 +2515,7 @@ async function _handleFire(ctx) {
     // FG объекты + accumulator для weapon RoF (заполняется в loop, читается в _set_firing_Status).
     const firegroupUnits    = State.fireGroup.map(id => State.units[id]);
     const weaponsKeepingRoF = new Set();
+    const directingLeaderIds = new Set();   // лидеры, руководившие огнём в этом выстреле (им кладётся маркер First/Final Fire)
 
     // Цели ДО огня — для target-панели (одна строка на цель: before | after).
     const getPhaseTargets = () => {
@@ -2518,23 +2554,11 @@ async function _handleFire(ctx) {
             }
 
             // 3.2.2 (same-hex FG unity) + 3.3.3 (shots ≤ MF цели). Логи внутри функций.
-            if (Rules.check_separate_attack(getTargets(), firegroupUnits, State.fired_from_on_target_in_hex)) {
-                gameLog('Fire aborted: 3.2.2 — same-hex FG cannot split attacks across moving targets');
-                return;
-            }
-            if (Rules.check_shots_exceed_mf(getTargets(), firegroupUnits, State.fired_from_on_target_in_hex)) {
-                gameLog('Fire aborted: 3.3.3 — shots exceed target MF');
-                return;
-            }
+            if (Rules.check_separate_attack(getTargets(), firegroupUnits, State.fired_from_on_target_in_hex)) return;
+            if (Rules.check_shots_exceed_mf(getTargets(), firegroupUnits, State.fired_from_on_target_in_hex)) return;
             // SFF/FPF preconditions на всей FG — нарушение одного → отмена всей атаки.
-            if (!Rules.checkSFFValid(firegroupUnits, targetHex, State.units, State.orchardInSeason)) {
-                gameLog('Fire aborted: SFF rule violated (precondition failed)');
-                return;
-            }
-            if (!Rules.checkFPFValid(firegroupUnits, targetHex)) {
-                gameLog('Fire aborted: FPF rule violated (precondition failed)');
-                return;
-            }
+            if (!Rules.checkSFFValid(firegroupUnits, targetHex, State.units, State.orchardInSeason)) return;
+            if (!Rules.checkFPFValid(firegroupUnits, targetHex)) return;
 
             // все предпроверки пройдены — рисуем LoS и точки блока
             _drawLOS(State.fireGroupHexesArray, targetHex, validHexes);
@@ -2548,6 +2572,7 @@ async function _handleFire(ctx) {
             }
             // breakdown для всех стрелков без LoS (включая partial case, где только часть FG без LoS)
             if (noLoSShooters.length > 0) await _handleNoLoSBreakdown(noLoSShooters, weaponsKeepingRoF);
+            _recordLeaderDirection(noLoSShooters, directingLeaderIds);   // правило 3.4: выстрел был, значит и руководство было
 
             for (const subFG of subFGsArray) {
 
@@ -2559,6 +2584,7 @@ async function _handleFire(ctx) {
                 console.log(`[${phase}] sub-FG units=${subFG.map(u=>u.id).join(',')}`);
                 const result = Rules.fireAttack(subFG, targetHex, targets, State.units, State.orchardInSeason);
                 if (result === null) continue;
+                _recordLeaderDirection(subFG, directingLeaderIds);   // правило 3.4: пишем до применения эффектов, чтобы статус лидера после огня не влиял
                 if (result.coloredDie !== undefined) UIState.showDice(result.coloredDie, result.whiteDie);
                 for (const u of subFG) if (u.category === 'carried' && u.mgClass) shakeNode(u.node);
 
@@ -2670,10 +2696,7 @@ async function _handleFire(ctx) {
 
             // FirstFire → только adjacent/same. Нарушение любого юнита → отмена всей атаки.
             // FinalFire уже отсечён на addToFireGroup (rules.checkIfAddingToFireGroupIsValid).
-            if (!Rules.checkDFPhFinalFireValid(firegroupUnits, targetHex)) {
-                gameLog('Fire aborted: Final Fire rule violated (precondition failed)');
-                return;
-            }
+            if (!Rules.checkDFPhFinalFireValid(firegroupUnits, targetHex)) return;
 
             // предпроверки пройдены — рисуем LoS и точки блока
             _drawLOS(State.fireGroupHexesArray, targetHex, validHexes);
@@ -2687,6 +2710,7 @@ async function _handleFire(ctx) {
             }
             // breakdown для всех стрелков без LoS (включая partial case, где только часть FG без LoS)
             if (noLoSShooters.length > 0) await _handleNoLoSBreakdown(noLoSShooters, weaponsKeepingRoF);
+            _recordLeaderDirection(noLoSShooters, directingLeaderIds);   // правило 3.4: выстрел был, значит и руководство было
 
             for (const subFG of subFGsArray) {
                 const targets = getTargets();
@@ -2697,6 +2721,7 @@ async function _handleFire(ctx) {
                 console.log(`[${phase}] sub-FG units=${subFG.map(u=>u.id).join(',')}`);
                 const result = Rules.fireAttack(subFG, targetHex, targets, State.units, State.orchardInSeason);
                 if (result === null) continue;
+                _recordLeaderDirection(subFG, directingLeaderIds);   // правило 3.4: пишем до применения эффектов, чтобы статус лидера после огня не влиял
                 if (result.coloredDie !== undefined) UIState.showDice(result.coloredDie, result.whiteDie);
                 for (const u of subFG) if (u.category === 'carried' && u.mgClass) shakeNode(u.node);
 
@@ -2710,7 +2735,7 @@ async function _handleFire(ctx) {
     }
 
     // Пост-обработка: firingStatus / prepFired маркеры по phase-логике.
-    _set_firing_Status(phase, firegroupUnits, weaponsKeepingRoF);
+    _set_firing_Status(phase, firegroupUnits, weaponsKeepingRoF, directingLeaderIds);
 
     // Финальный cleanup FG: снять рамку inFireGroup и очистить массив.
     State.fireGroup.forEach(id => State.setUnit(id, 'inFireGroup', false));
@@ -2745,12 +2770,15 @@ function _set_residualFP_in_hex(targetHex, result) {
 }
 
 // Финализация firingStatus + phase-specific marker'ов после огня.
-function _set_firing_Status(phase, firegroupUnits, weaponsKeepingRoF) {
+function _set_firing_Status(phase, firegroupUnits, weaponsKeepingRoF, directingLeaderIds) {
     if (phase === 'movement') {
         // MPh: ' ' → FirstFire → FinalFire
         firegroupUnits.forEach(u => {
             if (weaponsKeepingRoF.has(u.id)) return;
             if (u.firingStatus === undefined) return;
+            if (u.type === 'leader' && !directingLeaderIds.has(u.id)) return;   // лидер, не руководивший в этом выстреле, маркер не получает
+            if (u.firingStatus === 'FirstFire')      gameLog(`    #${u.id} ${u.type}: First Fire → Final Fire`);
+            else if (u.firingStatus === ' ')         gameLog(`    #${u.id} ${u.type}: none → First Fire`);
             if (u.firingStatus === 'FirstFire')      State.setUnit(u.id, 'firingStatus', 'FinalFire');
             else if (u.firingStatus === ' ')         State.setUnit(u.id, 'firingStatus', 'FirstFire');
         });
@@ -2759,6 +2787,9 @@ function _set_firing_Status(phase, firegroupUnits, weaponsKeepingRoF) {
         firegroupUnits.forEach(u => {
             if (weaponsKeepingRoF.has(u.id)) return;
             if (u.firingStatus === undefined) return;
+            if (u.type === 'leader' && !directingLeaderIds.has(u.id)) return;   // лидер, не руководивший в этом выстреле, маркер не получает
+            if (u.firingStatus === ' ')              gameLog(`    #${u.id} ${u.type}: none → Final Fire`);
+            else if (u.firingStatus === 'FirstFire') gameLog(`    #${u.id} ${u.type}: First Fire → Final Fire`);
             State.setUnit(u.id, 'firingStatus', 'FinalFire');
         });
     } else if (phase === 'prepFire') {
@@ -2768,6 +2799,8 @@ function _set_firing_Status(phase, firegroupUnits, weaponsKeepingRoF) {
         firegroupUnits.forEach(u => {
             if (weaponsKeepingRoF.has(u.id)) return;
             State.setUnit(u.id, 'prepFired', true);
+            gameLog(`    #${u.id} ${u.type}: Prep Fire counter placed`);
+            if (u.category !== 'carried' && u.exhausted) gameLog(`    #${u.id} ${u.type}: CX counter removed`);
             if (u.category !== 'carried') State.setUnit(u.id, 'exhausted', false);
         });
     } else if (phase === 'advancingFire') {
@@ -2968,9 +3001,9 @@ function _replace_unit(oldId, newTemplateId, newId) {
 // применить changes от fireAttack: { unitId: 'broken'|'pinned'|'eliminated'|'reduced'|'wounded' }
 async function _apply_changes_for_targets(changes) {
     for (const [id, state] of Object.entries(changes)) {
-        // Лог: что именно изменилось (цель/оружие → новый статус).
+        // Лог: что изменилось с целью. Оружие не пишем: его поломку уже показала проверка B# одной строкой.
         const _u = State.units[id];
-        if (_u) gameLog(`  ${_u.category === 'carried' ? 'weapon' : 'target'} #${id} ${_u.type}: → ${state}`);
+        if (_u && _u.category !== 'carried') gameLog(`  target #${id} ${_u.type}: → ${state}`);
         // eliminated — юнит уничтожается физически (KIA-визуал + пауза + remove)
         if (state === 'eliminated') {
             const u = State.units[id];
@@ -3133,6 +3166,8 @@ async function _apply_movement_result_in_State_for_all_MG(result, targetHex, ove
     if (residualFP > 0) {
         const enteringUnits = Object.keys(result.unitChanges).map(id => State.units[id]);
         console.log(`[residual trigger] hex=${hexKey} FP=${residualFP} targets=${enteringUnits.map(u=>u.id).join(',')}`);
+        const names = enteringUnits.map(u => `#${u.id} ${u.type}`).join(', ');                                    // кто вошёл в гекс
+        gameLog(`Residual FP ${residualFP} in hex ${targetHex.col}-${targetHex.row}: attack on ${names}`);
         const changes = Rules.residualAttack(residualFP, enteringUnits, targetHex);
         if (Object.keys(changes).length > 0) {
             await _apply_changes_for_targets(changes);

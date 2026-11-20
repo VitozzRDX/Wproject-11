@@ -226,6 +226,13 @@ function _hindranceTextForLog(shooterHexes, targetHex) {
     if (worst.length === 0) return '';                                // Hindrance 0 — объяснять нечего
     return ` (${worst.map(p => `${p.text} +${p.value}`).join(', ')})`;
 }
+// Только для лога. Лидеры группы, которым правило 3.4 запрещает руководить. Пустая строка, если таких нет.
+function _leaderBlockedTextForLog(firegroupUnits) {
+    const blocked = firegroupUnits.filter(u => u.type === 'leader' && !_mayLeaderDirect(u, firegroupUnits));
+    if (blocked.length === 0) return '';
+    const names = blocked.map(u => `#${u.id}`).join(', ');
+    return ` (leader ${names} cannot direct: other firers than in his first group, 3.4)`;
+}
 // --- конец блока «тексты для лога» ---
 
 function calcTotalFirepower(units, targetHex) {
@@ -538,7 +545,7 @@ function calcFFMO(unit, targetHex, treeLinedShield = false) {
 // Leadership DRM (3.2.2)
 // ===========================================================================
 function calcLeadershipDRM(firegroupUnits) {
-    const leaders = firegroupUnits.filter(u => u.type === 'leader' && !u.pinned);
+    const leaders = firegroupUnits.filter(u => u.type === 'leader' && !u.pinned && _mayLeaderDirect(u, firegroupUnits));   // 3.4: лидер, связанный с другой группой, не руководит
     if (leaders.length === 0) return 0;
 
     const fgHexes     = new Set(firegroupUnits.map(u => hexLabel(u.hex.col, u.hex.row)));
@@ -557,6 +564,29 @@ function calcLeadershipDRM(firegroupUnits) {
     return Math.max(...leaders.map(l => l.leadershipModifier ?? 0));
 }
 
+// Огонь «управляется лидером» (3.2.2): нужен неприжатый лидер в КАЖДОМ гексе огневой группы.
+// Для группы в одном гексе это значит «в группе есть неприжатый лидер».
+function _isLeaderDirected(firegroupUnits) {
+    const leaders = firegroupUnits.filter(u => u.type === 'leader' && !u.pinned && _mayLeaderDirect(u, firegroupUnits));   // прижатый лидер не руководит; лидер, связанный правилом 3.4 с другой группой, тоже
+    if (leaders.length === 0) return false;
+    const fgHexes     = new Set(firegroupUnits.map(u => hexLabel(u.hex.col, u.hex.row)));  // гексы, в которых стоят стрелки
+    const leaderHexes = new Set(leaders.map(l => hexLabel(l.hex.col, l.hex.row)));         // гексы, в которых стоят лидеры
+    return [...fgHexes].every(h => leaderHexes.has(h));                                    // в каждом гексе группы есть лидер
+}
+
+// Правило 3.4: лидер, уже руководивший в этот Player Turn, может руководить только теми же стрелками (или их частью).
+function _mayLeaderDirect(leader, firegroupUnits) {
+    if (!leader.directedFirers) return true;                                    // ещё не руководил — может
+    const firers = firegroupUnits.filter(u => u.type !== 'leader');             // стрелки группы без лидеров
+    return firers.every(u => leader.directedFirers.includes(u.id));             // все стрелки были в его первой группе
+}
+
+// Лидеры, которые реально руководят этой группой (для записи по правилу 3.4).
+function directingLeaders(firegroupUnits) {
+    if (!_isLeaderDirected(firegroupUnits)) return [];                          // группа не под командой лидера
+    return firegroupUnits.filter(u => u.type === 'leader' && !u.pinned && _mayLeaderDirect(u, firegroupUnits));
+}
+
 // ===========================================================================
 // Fire Effect + apply
 // ===========================================================================
@@ -564,7 +594,10 @@ function calcLeadershipDRM(firegroupUnits) {
 // Inexperienced юнит в FG → сдвиг на 2 колонки вместо 1.
 // Возвращает новую колонку либо null если ушли ниже минимальной (промах).
 function _applyCowering(units, col, red, white) {
-    if (units.some(u => u.type === 'leader')) return col;   // leader-directed → cowering negated
+    if (_isLeaderDirected(units)) {
+        gameLog(`    cowering (doubles ${red}+${white}): negated, a leader directs the fire`);
+        return col;   // огонь под командой лидера → cowering отменяется
+    }
     const inexperienced = units.some(u => u.quality === 'Inexperienced');
     const shift = inexperienced ? 2 : 1;
     const currentIdx = IFT_COLUMNS.indexOf(col);
@@ -572,8 +605,11 @@ function _applyCowering(units, col, red, white) {
     console.log(`[cowering] doubles ${red}+${white} → shift ${shift} col left (${col} → ${IFT_COLUMNS[newIdx] ?? 'below'})`);
     if (newIdx < 0) {
         console.log(`[cowering] ниже минимальной колонки → без эффекта`);
+        gameLog(`    cowering (doubles ${red}+${white}): shifts the IFT column ${shift} left, below the lowest one → no effect`);
         return null;
     }
+    const reason = inexperienced ? ', Inexperienced' : '';           // почему сдвиг на 2
+    gameLog(`    cowering (doubles ${red}+${white}): IFT column ${col} → ${IFT_COLUMNS[newIdx]} (shift ${shift}${reason})`);
     return IFT_COLUMNS[newIdx];
 }
 
@@ -589,8 +625,10 @@ function _calc_malfunction(weaponsInFG, baseDr) {
     weaponsInFG.forEach(u => {
         const bReduce    = (u.firingStatus === 'FirstFire' || u.firingStatus === 'FinalFire') ? 2 : 0;
         const effectiveB = u.breakdownNumber - bReduce;
+        const reduceNote = bReduce > 0 ? ` (${u.breakdownNumber} - ${bReduce}: ${u.firingStatus} counter)` : '';   // почему B# ниже печатного
         if (baseDr >= effectiveB) {
             console.log(`[weapon ${u.id}] B# hit: DR=${baseDr} >= ${effectiveB} → malfunctioned`);
+            gameLog(`    weapon #${u.id} ${u.type}: DR ${baseDr} >= B# ${effectiveB}${reduceNote} → broken`);
             broken.add(u.id);
         }
     });
@@ -614,10 +652,7 @@ export function breakdownCheckNoLoS(firegroupUnits) {
     const brokenWeapons     = _calc_malfunction(weaponsInFG, baseDr);
     const weaponsKeepingRoF = _calc_weapons_kept_RoF(weaponsInFG, coloredDie, brokenWeapons);
     const changes = {};
-    for (const id of brokenWeapons) {
-        changes[id] = 'broken';
-        gameLog(`weapon #${id} malfunctioned (B# hit on DR ${baseDr})`);
-    }
+    for (const id of brokenWeapons) changes[id] = 'broken';   // строки про поломку и RoF пишут сами _calc_malfunction и _calc_weapons_kept_RoF
     return { changes, coloredDie, whiteDie, weaponsKeepingRoF };
 }
 
@@ -628,6 +663,7 @@ function _calc_weapons_kept_RoF(weaponsInFG, coloredDie, brokenWeapons) {
         if (brokenWeapons.has(u.id)) return;
         if (coloredDie <= u.rof) {
             console.log(`[weapon ${u.id}] RoF preserved: coloredDie=${coloredDie} <= rof=${u.rof}`);
+            gameLog(`    weapon #${u.id} ${u.type}: RoF ${u.rof}, colored die ${coloredDie} → keeps RoF`);
             kept.push(u.id);
         }
     });
@@ -678,6 +714,7 @@ function calcFireEffect(units, targetHex, drm = 0) {
     const red   = _rollD6_();
     const white = _rollD6_();
     const dr    = red + white;
+    gameLog(`  DR ${red}+${white}=${dr}`);                         // бросок пишем сразу, чтобы строка miss шла после него
 
     if (red === white) {
         const newCol = _applyCowering(units, col, red, white);
@@ -692,6 +729,7 @@ function calcFireEffect(units, targetHex, drm = 0) {
     console.log(`[calcFireEffect] FP=${fp}, col=${col}, DR=${dr} (${red}+${white}), DRM=${drm}, idx=${idx}`);
     if (idx >= arr.length) {
         console.log(`[calcFireEffect] промах (idx ${idx} >= length ${arr.length})`);
+        gameLog(`    miss: DR ${dr} + DRM ${drm} = ${rawIdx}, the IFT gives no result above ${arr.length - 1} for this attack`);
         return { effect: false, baseDr: dr, coloredDie: red, whiteDie: white };
     }
     console.log(`[calcFireEffect] результат:`, arr[idx]);
@@ -711,8 +749,9 @@ function calcFireEffect(units, targetHex, drm = 0) {
 // fixedDr — если задан, используется вместо 2d6 (для сценариев/тестов).
 function _processMC(targets, k, result, fixedDr = null) {
     targets = targets.filter(u => u.category !== 'carried');   // weapons без morale — не проходят MC
+    const isBroken  = u => u.broken || result[u.id] === 'broken';   // сломан раньше или в этом же выстреле (результат ещё не применён к юниту)
     // Сортировка лидеров по эффективной морали (broken → brokenMorale)
-    const effMorale = u => u.broken ? u.brokenMorale : u.morale;
+    const effMorale = u => isBroken(u) ? u.brokenMorale : u.morale;
     const leaders    = targets.filter(u => u.type === 'leader').sort((a,b) => effMorale(b) - effMorale(a));
     const nonLeaders = targets.filter(u => u.type !== 'leader');
 
@@ -726,12 +765,15 @@ function _processMC(targets, k, result, fixedDr = null) {
         // fixedDr — если задан, используется вместо ролла (например для FPF NMC)
         const baseDr  = fixedDr ?? roll2d6();
         const finalDr = baseDr + k + drm;
+        const original12  = baseDr === 12 ? ' (original 12)' : '';   // 12 на кубах — особое правило, видно в логе
+        const moraleLabel = isBroken(u) ? 'broken morale' : 'morale';   // у сломанного юнита другая мораль
+        gameLog(`    MC #${u.id} ${u.type}: DR ${baseDr}${original12} (MC mod ${k}, leader ${drm}) = ${finalDr} vs ${moraleLabel} ${morale}`);
 
         // Broken юниты тоже проходят MC. Провал → Casualty Reduction:
         //   leader → wound severity (_woundLeader)
         //   halfSquad/crew → eliminated
         //   squad → reduced (→ HS)
-        if (u.broken) {
+        if (isBroken(u)) {
             // A3.5: broken-no-DM цель, участвующая в MC/NMC-ролле от FP → ставим DM независимо от исхода
             if (!u.desperationMorale) _placeDM(u);
             if (baseDr === 12) {
@@ -739,7 +781,11 @@ function _processMC(targets, k, result, fixedDr = null) {
                 return 'eliminated';
             }
             console.log(`[MC broken] ${u.id}: DR=${baseDr}, k=${k}, leaderDRM=${drm}, итог=${finalDr}, brokenMorale=${morale} → ${finalDr > morale ? 'CR' : 'ok'}`);
-            if (finalDr > morale) return _casualtyReduction(u);
+            if (finalDr > morale) {
+                u.broken = true;   // мутация чтобы _replace_unit унаследовал broken (юнит мог сломаться в этом же выстреле)
+                return _casualtyReduction(u);
+            }
+            gameLog('      → no effect');                // сломанный юнит прошёл проверку
             return 'ok';
         }
 
@@ -769,6 +815,7 @@ function _processMC(targets, k, result, fixedDr = null) {
             return 'broken';
         }
         if (finalDr === morale && !u.pinned)      return 'pinned';
+        gameLog('      → no effect');                    // прошёл проверку, либо уже был прижат
         return 'ok';
     };
 
@@ -778,7 +825,7 @@ function _processMC(targets, k, result, fixedDr = null) {
         if (outcome !== 'ok') result[u.id] = outcome;
         // прошёл unharmed И не broken → его leadership DRM в пул для остальных.
         // (broken лидер не помогает; wound уже был применён мутацией u.leadershipModifier)
-        if (outcome === 'ok' && !u.pinned && !u.broken) {
+        if (outcome === 'ok' && !u.pinned && !u.broken && !result[u.id]) {   // !result[u.id]: пострадавший в этом выстреле лидер не помогает
             leaderDRM = Math.min(leaderDRM, u.leadershipModifier ?? 0);
         }
     });
@@ -795,6 +842,7 @@ function _processMC(targets, k, result, fixedDr = null) {
 function _placeDM(u) {
     u.desperationMorale = true;
     console.log(`[DM] ${u.id} → desperation morale placed`);
+    gameLog(`    unit #${u.id} ${u.type}: desperation morale placed`);
 }
 
 // Casualty Reduction — единая точка для K/, broken-MC-fail, KIA-survivor-broken.
@@ -817,14 +865,19 @@ function _casualtyReduction(u) {
 // МУТИРУЕТ юнита: u.wounded, u.morale, u.leadershipModifier — статус wound перманентен.
 function _woundLeader(u) {
     const dr = rollD6() + (u.wounded ? 1 : 0);
+    const alreadyWounded = u.wounded ? ' (+1, already wounded)' : '';   // для лога, считаем до смены u.wounded
     console.log(`[wound severity] ${u.id}: dr=${dr}${u.wounded ? ' (+1 already wounded)' : ''}`);
-    if (dr > 4) return 'eliminated';
+    if (dr > 4) {
+        gameLog(`    leader #${u.id}: wound severity dr ${dr}${alreadyWounded} → eliminated`);
+        return 'eliminated';
+    }
     u.wounded = true;
     u.morale -= 1;
     u.brokenMorale -= 1;   // wound действует и на broken-стороне SMC
     u.leadershipModifier = (u.leadershipModifier ?? 0) + 1;
     u.mf = Math.min(u.mf, 3);   // wounded SMC has 3 MF
     console.log(`[wound light] ${u.id}: morale→${u.morale}, brokenMorale→${u.brokenMorale}, DRM→${u.leadershipModifier}, mf→${u.mf}`);
+    gameLog(`    leader #${u.id}: wound severity dr ${dr}${alreadyWounded} → wounded (morale ${u.morale}, leadership DRM ${u.leadershipModifier}, MF ${u.mf})`);
     return 'wounded';
 }
 
@@ -857,25 +910,31 @@ function _lltc(leader, targets, result) {
     });
     if (affected.length === 0) {
         console.log(`[LLTC] leader ${leader.id} broken → нет affected: у всех подчинённых мораль ≥ лидерской (${effMorale(leader)})`);
+        gameLog(`    LLTC: leader #${leader.id} broken — nobody affected (either all subordinates have morale ≥ ${effMorale(leader)}, or they are already eliminated, broken or pinned)`);
     } else {
         console.log(`[LLTC] leader ${leader.id} broken → PTC penalty=${penalty}, affected: ${affected.map(u=>u.id).join(',')}`);
+        const names = affected.map(u => `#${u.id}`).join(', ');           // кого касается проверка
+        gameLog(`    LLTC: leader #${leader.id} broken — PTC for ${names} (penalty ${penalty})`);
         _processPTC(affected, penalty, result);
     }
 }
 
 // Leader Loss Morale Check — то же самое, только NMC вместо PTC.
 function _llmc(leader, targets, result) {
-    const effMorale = u => u.broken ? u.brokenMorale : u.morale;
+    // «Текущая» мораль: юнит, сломанный в этом же выстреле, уже на стороне broken (результат ещё не применён к юниту)
+    const effMorale = u => (u.broken || result[u.id] === 'broken') ? u.brokenMorale : u.morale;
     const penalty  = -(leader.leadershipModifier ?? 0);
     const affected = targets.filter(u => {
-        const s = result[u.id];
-        if (s === 'eliminated' || s === 'broken' || s === 'pinned') return false;
+        if (result[u.id] === 'eliminated') return false;   // исключаем только уничтоженных: сломанные и прижатые тоже проходят LLMC
         return effMorale(u) < effMorale(leader);
     });
     if (affected.length === 0) {
         console.log(`[LLMC] leader ${leader.id} eliminated → нет affected: у всех подчинённых мораль ≥ лидерской (${effMorale(leader)})`);
+        gameLog(`    LLMC: leader #${leader.id} eliminated — nobody affected (either all subordinates have morale ≥ ${effMorale(leader)}, or they are already eliminated)`);
     } else {
         console.log(`[LLMC] leader ${leader.id} eliminated → NMC penalty=${penalty}, affected: ${affected.map(u=>u.id).join(',')}`);
+        const names = affected.map(u => `#${u.id}`).join(', ');           // кого касается проверка
+        gameLog(`    LLMC: leader #${leader.id} eliminated — NMC for ${names} (penalty ${penalty})`);
         _processMC(affected, penalty, result);
     }
 }
@@ -893,15 +952,24 @@ function _processPTC(targets, drm, result) {
     let leaderDRM = 0;
 
     const rollPTC = (u, leaderDrmForThis) => {
-        if (u.broken || u.pinned) return null;
+        if (u.broken || u.pinned) {
+            const why = u.broken ? 'broken' : 'already pinned';          // почему юнит не бросает
+            gameLog(`    PTC #${u.id} ${u.type}: skipped (${why})`);
+            return null;
+        }
         // если результат уже установлен на этом юните в текущем applyFireEffect — не роллим повторно
         const inProgress = result[u.id];
-        if (inProgress === 'broken' || inProgress === 'pinned' || inProgress === 'eliminated') return null;
+        if (inProgress === 'broken' || inProgress === 'pinned' || inProgress === 'eliminated') {
+            gameLog(`    PTC #${u.id} ${u.type}: skipped (already ${inProgress} by this attack)`);
+            return null;
+        }
         const morale = effMorale(u);
         const baseDr = roll2d6();
         const finalDr = baseDr + drm + leaderDrmForThis;
         console.log(`[PTC] ${u.id}: DR=${baseDr}, drm=${drm}, leaderDRM=${leaderDrmForThis}, итог=${finalDr}, morale=${morale} → ${finalDr > morale ? 'pinned' : 'ok'}`);
-        return finalDr > morale ? 'pinned' : 'ok';
+        const outcome = finalDr > morale ? 'pinned' : 'ok';
+        gameLog(`    PTC #${u.id} ${u.type}: DR ${baseDr} (PTC mod ${drm}, leader ${leaderDrmForThis}) = ${finalDr} vs morale ${morale} → ${outcome}`);
+        return outcome;
     };
 
     leaders.forEach(u => {
@@ -937,9 +1005,11 @@ function applyFireEffect(effect, targets) {
             break;
         }
         case 'KIA': {
+            gameLog(`    KIA ${k}: ${Math.min(k, targets.length)} of ${targets.length} units are killed, chosen at random`);
             const shuffled = [...targets].sort(() => Math.random() - 0.5);
             shuffled.slice(0, k).forEach(u => {
                 console.log(`[KIA] ${u.id} → eliminated`);
+                gameLog(`    KIA: #${u.id} ${u.type} → eliminated`);
                 result[u.id] = 'eliminated';
             });
             shuffled.slice(k).forEach(u => {
@@ -947,8 +1017,10 @@ function applyFireEffect(effect, targets) {
                     // выживший, но уже сломан → Casualty Reduction
                     result[u.id] = _casualtyReduction(u);
                     console.log(`[KIA survivor already broken] ${u.id} → CR: ${result[u.id]}`);
+                    gameLog(`    KIA survivor: #${u.id} ${u.type} was already broken → casualty reduction: ${result[u.id]}`);
                 } else {
                     console.log(`[KIA survivor] ${u.id} → broken + DM`);
+                    gameLog(`    KIA survivor: #${u.id} ${u.type} → broken`);
                     result[u.id] = 'broken';
                     _placeDM(u);
                 }
@@ -962,6 +1034,7 @@ function applyFireEffect(effect, targets) {
 
             result[victim.id] = _casualtyReduction(victim);
             console.log(`[K/ casualty] ${victim.id} → ${result[victim.id]}`);
+            gameLog(`    K/: #${victim.id} ${victim.type} chosen at random → casualty reduction: ${result[victim.id]}`);
             _processMC(others, k, result);
             break;
         }
@@ -992,6 +1065,7 @@ function _check_DFPh_FinalFire_valid(firegroupUnits, targetHex) {
     for (const u of firegroupUnits) {
         if (u.firingStatus === 'FirstFire' && hexDistance(u.hex, targetHex) > 1) {
             console.log(`[Final Fire blocked] ${u.id}: FirstFire → только adjacent/same hex`);
+            gameLog(`    Final Fire blocked: #${u.id} ${u.type} (${u.hex.col}-${u.hex.row}) has a First Fire counter: target ${targetHex.col}-${targetHex.row} is at distance ${hexDistance(u.hex, targetHex)}, it can fire only at the same or an adjacent hex`);
             return false;
         }
     }
@@ -1005,6 +1079,7 @@ function _check_FPF_valid(firegroupUnits, targetHex) {
         const dist = hexDistance(u.hex, targetHex);
         if (dist > 1) {
             console.log(`[FPF blocked] ${u.id}: dist ${dist} > 1 (must be adjacent/same hex)`);
+            gameLog(`    FPF blocked: #${u.id} ${u.type} (${u.hex.col}-${u.hex.row}) has a Final Fire counter: target ${targetHex.col}-${targetHex.row} is at distance ${dist}, FPF needs the same or an adjacent hex`);
             return false;
         }
     }
@@ -1018,11 +1093,13 @@ function _check_SFF_valid(firegroupUnits, targetHex, units, orchardInSeason = fa
         const dist = hexDistance(u.hex, targetHex);
         if (dist > u.range) {
             console.log(`[SFF blocked] ${u.id}: dist ${dist} > normal range ${u.range}`);
+            gameLog(`    SFF blocked: #${u.id} ${u.type} (${u.hex.col}-${u.hex.row}): target ${targetHex.col}-${targetHex.row} is at distance ${dist}, beyond normal range ${u.range}`);
             return false;
         }
         const closest = _closest_enemy_distance(u, units, orchardInSeason);
         if (dist > closest) {
             console.log(`[SFF blocked] ${u.id}: dist ${dist} > closest KEU distance ${closest}`);
+            gameLog(`    SFF blocked: #${u.id} ${u.type} (${u.hex.col}-${u.hex.row}): target ${targetHex.col}-${targetHex.row} is at distance ${dist}, but the closest known enemy is at distance ${closest}`);
             return false;
         }
     }
@@ -1050,11 +1127,15 @@ function residualAttack(residualFP, targetUnits, targetHex) {
 
     const idx = Math.max(0, dr + drm);
     console.log(`[residual attack] targets=[${targetUnits.map(u=>u.id).join(',')}], FP=${residualFP}, col=${col}, DR=${dr}, DRM=${drm} (TEM=${tem}, FFNAM=${ffnam}, FFMO=${ffmo}, smoke=${smokeDRM}), idx=${idx}`);
+    gameLog(`  DR ${dr}`);
+    gameLog(`  DRM: TEM=${tem} (${_temTextForLog(targetHex, targetUnits, tem, 0)}), FFNAM=${ffnam}, FFMO=${ffmo}, smoke=${smokeDRM} → totalDRM=${drm}`);
     if (idx >= arr.length) {
         console.log('[residual attack] промах');
+        gameLog(`    miss: DR ${dr} + DRM ${drm} = ${dr + drm}, the IFT gives no result above ${arr.length - 1} for this attack`);
         return {};
     }
     console.log('[residual attack] эффект:', arr[idx]);
+    gameLog(`  → effect: ${arr[idx]}`);
     return applyFireEffect(arr[idx], targetUnits);
 }
 
@@ -1379,6 +1460,9 @@ function _check_separate_attack(targets, firegroupUnits, firedFromRecord) {
                 .map(f => f.id);
             if (shootersFromThisHex.some(id => !entry.firers.includes(id))) {
                 console.log(`Rule 3.2.2: юниты в одном hex, стреляющие в одну цель, обязаны стрелять как единая FG (hex ${shooterLabel}, цель ${t.id})`);
+                const earlier   = entry.firers.map(id => `#${id}`).join(', ');                                                  // кто стрелял по этой цели раньше
+                const newcomers = shootersFromThisHex.filter(id => !entry.firers.includes(id)).map(id => `#${id}`).join(', ');   // кого не было среди них
+                gameLog(`    3.2.2 blocked: units of hex ${shooterLabel} fire at #${t.id} as one group — earlier firers: ${earlier}; not among them: ${newcomers}`);
                 return true;
             }
         }
@@ -1398,6 +1482,7 @@ function _check_shots_exceed_mf(targets, firegroupUnits, firedFromRecord) {
             if (!entry) continue;
             if (entry.count >= t.mf_spent_in_current_hex) {
                 console.log(`Rule 3.3.3: из hex ${shooterLabel} по цели ${t.id} уже ${entry.count} выстрел(ов) = MF цели (${t.mf_spent_in_current_hex}), больше нельзя`);
+                gameLog(`    3.3.3 blocked: hex ${shooterLabel} already fired ${entry.count} time(s) at #${t.id}, the target spent ${t.mf_spent_in_current_hex} MF in this hex (shots cannot exceed MF spent)`);
                 return true;
             }
         }
@@ -1445,8 +1530,7 @@ function fireAttack(firegroupUnits, targetHex, hexUnits, units, orchardInSeason 
 
     const { effect, baseDr, coloredDie, whiteDie } = calcFireEffect(firegroupUnits, targetHex, totalDRM);
 
-    gameLog(`  DR ${coloredDie}+${whiteDie}=${baseDr}`);
-    gameLog(`  DRM: TEM=${tem} (${_temTextForLog(targetHex, hexUnits, baseTem, ha)}), HINDRANCE=${hindrance}${_hindranceTextForLog(shooterHexes, targetHex)}, FFNAM=${ffnam}, FFMO=${ffmo}, LEADER=${leadershipDRM} → totalDRM=${totalDRM}`);
+    gameLog(`  DRM: TEM=${tem} (${_temTextForLog(targetHex, hexUnits, baseTem, ha)}), HINDRANCE=${hindrance}${_hindranceTextForLog(shooterHexes, targetHex)}, FFNAM=${ffnam}, FFMO=${ffmo}, LEADER=${leadershipDRM}${_leaderBlockedTextForLog(firegroupUnits)} → totalDRM=${totalDRM}`);
     _shootersByHexForLog(firegroupUnits, targetHex);       // юниты по гексам, под каждой группой — дальность и линия
     gameLog(`    total FP=${totalFP}`);                     // сумма по подгруппе — по ней выбирается колонка таблицы огня
     gameLog(`  → effect: ${effect || 'None'}`);
@@ -1465,9 +1549,10 @@ function fireAttack(firegroupUnits, targetHex, hexUnits, units, orchardInSeason 
     const fpfShooters = firegroupUnits.filter(u => u.firingStatus === 'FinalFire');
     if (fpfShooters.length > 0) {
         const nmcSubjects = firegroupUnits.filter(u =>
-            u.firingStatus === 'FinalFire' || u.type === 'leader'
+            u.firingStatus === 'FinalFire' || (u.type === 'leader' && _mayLeaderDirect(u, firegroupUnits))   // 3.4: лидер, которому нельзя руководить, не «directing leader»
         );
         console.log(`[FPF NMC] subjects: ${nmcSubjects.map(u => u.id).join(',')}, fixedDr=${baseDr}`);
+        gameLog(`    FPF self-NMC: ${nmcSubjects.map(u => `#${u.id}`).join(', ')} roll with the attack DR ${baseDr}`);
         _processMC(nmcSubjects, 0, changes, baseDr);
         _checkLeaderLoss(nmcSubjects, changes);
     }
@@ -1936,6 +2021,9 @@ export const Rules = {
         const dr  = raw + (u.exhausted ? 1 : 0);
         const success = dr < 6;
         console.log(`[recover] ${u.id}: dr=${raw}${u.exhausted ? '+1 CX' : ''}=${dr} → ${success ? 'ok' : 'fail'}`);
+        const cxNote  = u.exhausted ? ' + 1 CX' : '';
+        const outcome = success ? 'success' : 'fail';
+        gameLog(`    Recovery #${u.id} ${u.type}: DR ${raw}${cxNote} = ${dr} → ${outcome}`);
         return { success };
     },
 
@@ -1959,6 +2047,13 @@ export const Rules = {
         const final = dr + selfPenalty + drmDM + drmTerrain + leaderDRM;
         const pass  = final <= unit.brokenMorale;
         console.log(`[${kind}] ${unit.id}: dr=${dr}${selfPenalty?`+${selfPenalty}self`:''}${drmDM?`+${drmDM}DM`:''}${drmTerrain?`${drmTerrain}cover`:''}${leaderDRM?`${leaderDRM>0?'+':''}${leaderDRM}leader`:''}=${final} vs brokenMorale=${unit.brokenMorale} → ${pass?'rallied':'fail'}`);
+        const parts = [`DR ${dr}`];                                   // из чего сложился итог
+        if (selfPenalty) parts.push(`self +${selfPenalty}`);
+        if (drmDM)       parts.push(`DM +${drmDM}`);
+        if (drmTerrain)  parts.push(`cover ${drmTerrain}`);
+        if (leaderDRM)   parts.push(`leader ${leaderDRM}`);
+        const verdict = pass ? 'rallied' : 'failed';
+        gameLog(`    ${kind} #${unit.id} ${unit.type}: ${parts.join(', ')} = ${final} vs broken morale ${unit.brokenMorale} → ${verdict}`);
         return { pass, originalTwelve: dr === 12 };
     },
 
@@ -2033,6 +2128,7 @@ export const Rules = {
     filter_hexes_with_Los,
     array_of_adjacent_Hexes_arrays,
     breakdownCheckNoLoS,
+    directingLeaders,
     hexInList: _hexInList,
 
     arrangeMovement(ctx) {

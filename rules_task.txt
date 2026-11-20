@@ -71,6 +71,15 @@ A unit using FPF must use all its FP and usable MG (or IFE) and may form a FG
 with units not using FPF, but only those units using FPF are affected by its
 adverse effects.
 
+3.4
+Leader direction used during Defensive First
+Fire can be used again in Subsequent First Fire,
+FPF, or Final Fire, but only for one firing unit or
+FG, and that unit or FG cannot include different
+firers than those he directed during First Fire. If
+forming a new FG during that Player Turn, the
+leader cannot direct its fire (even during FPF).
+
 3.2.3 Leader Loss Task Check (LLTC)
 If a leader breaks, all Good Order units with a lower current morale level
 stacked with him and not in CC must take a PTC after resolving the initial
