@@ -7,6 +7,9 @@ let uiLayer;
 let worldFxLayer;
 let ccLayer;                        // world-anchored, ПОД юнитами — только для CC-хекс подсветки
 const losLines = [];
+const dmKeepLines = [];       // красные линии от планки «keep DM» к юнитам
+let dmKeepPoints = [];        // центры юнитов (мировые координаты), к которым ведут линии
+let dmPlankCenter = null;     // центр планки «keep DM» в координатах экрана
 // Отображаемые тексты кнопок по их label-ключу. Используется в drawButton как источник
 // текста по умолчанию (можно переопределить через def.text).
 const BUTTON_TEXT = {
@@ -15,6 +18,31 @@ const BUTTON_TEXT = {
     StartCC:         'Roll Close Combat !',
     Confirm:         'Confirm',
     ConfirmCCDefend: 'Confirm',
+    EndAttackerRecovery:  'End Attacker Recovery',
+    EndDefenderRecovery:  'End Defender Recovery',
+    EndAttackerRepair:    'End Attacker Repair',
+    EndDefenderRepair:    'End Defender Repair',
+    EndAttackerTransfer:  'End Attacker Transfer',
+    EndDefenderTransfer:  'End Defender Transfer',
+    EndAttackerSelfRally: 'End Attacker Self-Rally',
+    EndDefenderSelfRally: 'End Defender Self-Rally',
+    EndAttackerUnitRally: 'End Attacker Unit Rally',
+    EndDefenderUnitRally: 'End Defender Unit Rally',
+};
+
+// Планки подфаз Rally на месте двух кнопок End… (y — как у кнопок подфазы).
+const RALLY_PLANKS = {
+    recoverySkipped: { y: 100, text: 'Rally Recovery Phase skipped - nothing to Recover' },
+    recoveryEnded:   { y: 100, text: 'Rally Recovery ended' },
+    repairSkipped:   { y: 150, text: 'Rally Repair Phase skipped - nothing to Repair' },
+    repairEnded:     { y: 150, text: 'Rally Repair ended' },
+    transferEnded:   { y: 200, text: 'Rally Transfer ended' },
+    selfRallySkipped: { y: 250, text: 'Rally Self-Rally Phase skipped - nobody to Rally' },
+    selfRallyEnded:   { y: 250, text: 'Rally Self-Rally ended' },
+    unitRallySkipped: { y: 300, text: 'Rally Unit-Rally Phase skipped - nobody to Rally' },
+    unitRallyEnded:   { y: 300, text: 'Rally Unit-Rally ended' },
+    dmKeepChoose:     { bottomCenter: true, text: 'Choose which unit to keep DM' },
+    rallyEnded:       { y: 350, text: 'Rally Phase is ended. Press NEXT PHASE', white: true },
 };
 
 // Геометрия VS-панелей CC (единая точка для drawCCAttackPanels и getCCConfirmButtonPos).
@@ -113,6 +141,7 @@ export const RendererUI = {
         RendererUI.removeTargetPanel();
         RendererUI.removeCCAttackPanels();
         RendererUI.removeActiveSidePlank();
+        RendererUI.removeRallyPlanks();
         uiLayer?.batchDraw();
     },
 
@@ -155,6 +184,10 @@ export const RendererUI = {
             if (action === 'hideActiveSidePlank') RendererUI.removeActiveSidePlank();
             if (action === 'showAmbushInfoPlank') RendererUI.drawAmbushInfoPlank(data);
             if (action === 'hideAmbushInfoPlank') RendererUI.removeAmbushInfoPlank();
+            if (action === 'showRallyPlank')  RendererUI.drawRallyPlank(label);
+            if (action === 'hideRallyPlanks') RendererUI.removeRallyPlanks();
+            if (action === 'setDMKeepLines')  RendererUI.drawDMKeepLines(data.points);
+            if (action === 'hideRallyPlank')  RendererUI.removeRallyPlank(label);
             if (action === 'flashLOS')       RendererUI.drawLOSLine(data.from, data.to, data.color);
             if (action === 'clearLOS')       RendererUI.clearLOS();
             if (action === 'flashHitPoints') RendererUI.drawHitPoints(data);
@@ -918,6 +951,87 @@ export const RendererUI = {
         uiLayer?.batchDraw();
     },
 
+    // Планка на месте двух кнопок подфазы Rally (x=10…300, высота 36 — как у кнопок).
+    // Чёрный фон с прозрачностью (как у Ambush-планки), белый текст по центру в две строки.
+    drawRallyPlank(key) {
+        const { y, text, bottomCenter, white } = RALLY_PLANKS[key];
+        const W = 290, H = 36;
+        const px = bottomCenter ? (window.innerWidth - W) / 2 : 10;       // по центру экрана или у левого края
+        const py = bottomCenter ? window.innerHeight - H - 70 : y;        // внизу с отступом 70 px или фиксированный y
+        if (bottomCenter) dmPlankCenter = { x: px + W / 2, y: py + H / 2 };   // запоминаем для линий
+        const bg = new Konva.Rect({
+            x: px, y: py, width: W, height: H,
+            fill: white ? 'rgba(255,255,255,0.9)' : 'rgba(0,0,0,0.7)', cornerRadius: 4,
+            name: `rallyPlank rallyPlank-${key}`, listening: false,      // второе имя — для удаления по ключу
+        });
+        const txt = new Konva.Text({
+            x: px, y: py, width: W, height: H,
+            text, fill: white ? '#000' : '#fff', fontSize: 12, align: 'center', verticalAlign: 'middle',
+            name: `rallyPlank rallyPlank-${key}`, listening: false,
+        });
+        uiLayer.add(bg);
+        uiLayer.add(txt);
+        uiLayer.batchDraw();
+    },
+
+    removeRallyPlanks() {
+        if (!uiLayer) return;
+        dmKeepPoints = [];
+        dmPlankCenter = null;
+        RendererUI.refreshDMKeepLines();   // точек нет — линии стираются
+        uiLayer.find('.rallyPlank').forEach(n => n.destroy());
+        uiLayer.batchDraw();
+    },
+
+    // Убирает одну планку по ключу (имя ноды 'rallyPlank-<key>').
+    removeRallyPlank(key) {
+        if (!uiLayer) return;
+        uiLayer.find(`.rallyPlank-${key}`).forEach(n => n.destroy());
+        uiLayer.batchDraw();
+    },
+
+    // Рисует красные линии от центра планки «keep DM» к точкам. Вызывается при входе в DM-removal и при клике по юниту.
+    drawDMKeepLines(points) {
+        dmKeepPoints = points;
+        RendererUI.refreshDMKeepLines();
+    },
+
+    // Перерисовывает красные линии от планки «keep DM» к юнитам с нуля.
+    // Вызывается: из drawDMKeepLines (вход в DM-removal и клик по юниту), из scrollLoop (камера сдвинулась)
+    // и из removeRallyPlanks (конец Rally, точек уже нет — линии просто стираются).
+    refreshDMKeepLines() {
+        // 1. Стираем линии, нарисованные предыдущим вызовом этого же метода.
+        //    Проще нарисовать заново, чем двигать существующие. При первом вызове стирать нечего.
+        dmKeepLines.forEach(l => l.destroy());
+        dmKeepLines.length = 0;
+
+        // 2. Планки на экране нет — линии не нужны (после стирания выше слой остаётся чистым).
+        if (!dmPlankCenter) { worldFxLayer.batchDraw(); return; }
+
+        // 3. Начало линии — центр планки. Планка лежит в uiLayer и привязана к экрану,
+        //    а линии рисуются в worldFxLayer, который двигается вместе с картой.
+        //    uiLayer сдвинут на минус сдвиг камеры (main.js: uiLayer.x(-stage.x())),
+        //    поэтому «экранная точка + uiLayer.x()» = та же точка в мировых координатах.
+        const fromX = dmPlankCenter.x + uiLayer.x();
+        const fromY = dmPlankCenter.y + uiLayer.y();
+
+        // 4. Концы линий — dmKeepPoints: центры юнитов в мировых координатах.
+        //    Их считает engine (_dmKeepLinePoints), передаёт через UIState.setDMKeepLines,
+        //    а drawDMKeepLines кладёт в dmKeepPoints перед вызовом этого метода.
+        //    По одной красной линии толщиной 1, как у LoS; listening:false — клики проходят сквозь линию.
+        for (const p of dmKeepPoints) {
+            const line = new Konva.Line({
+                points: [fromX, fromY, p.x, p.y],
+                stroke: 'red', strokeWidth: 1, listening: false,
+            });
+            worldFxLayer.add(line);
+            dmKeepLines.push(line);   // запоминаем, чтобы стереть при следующем вызове
+        }
+
+        // 5. Один раз перерисовываем слой после всех линий.
+        worldFxLayer.batchDraw();
+    },
+
     // Текст итогового FP у левого-верхнего угла hex'а (world-anchored на worldFxLayer).
     drawHoverFP(hex, fp) {
         RendererUI.removeHoverFP();
@@ -1034,10 +1148,11 @@ export const RendererUI = {
 
     drawButton({ x, y, label, text }) {
         RendererUI.removeButton(label);
+        const W = /^End(Attacker|Defender)/.test(label) ? 140 : 120;   // кнопки End… подфаз Rally шире, на них длинные подписи
         const group = new Konva.Group({ x, y, name: `btn-${label}` });
         group.setAttr('buttonLabel', label);                           // идентификатор для interpreter
         const rect  = new Konva.Rect({
-            width: 120, height: 36, fill: '#333', cornerRadius: 4,
+            width: W, height: 36, fill: '#333', cornerRadius: 4,
             stroke: 'white', strokeWidth: 1,
         });
         let displayText;
@@ -1047,7 +1162,7 @@ export const RendererUI = {
         const txt = new Konva.Text({
             text: displayText,
             fill: '#fff',
-            width: 120, height: 36, align: 'center', verticalAlign: 'middle',
+            width: W, height: 36, align: 'center', verticalAlign: 'middle',
         });
         group.add(rect, txt);
 

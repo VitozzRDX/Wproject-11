@@ -9,7 +9,7 @@ import { getLastHit } from './terrainLOS.js';
 import { flipReplaceUnit, raiseToTop, shakeNode } from './renderer.js';
 import { getCCConfirmButtonPos } from './rendererUI.js';
 import { recalculateHex, recalculateHexInstant } from './positioning.js';
-import { save, load } from './saveLoad.js';
+import { save, load, hasSave } from './saveLoad.js';
 import { initSetupSide, applyDiceRoll, placeFromPool, returnToPool, instantUnitMoveFromHexToHex, refreshSetupPanel } from './setupPhase.js';
 import { gameLog } from './gameLog.js';
 
@@ -208,6 +208,12 @@ const handlers = {
             gameLog('ESC — target panel closed');
             State.lastGroupInteracted = null;
             UIState.hideTargetPanel();
+            return;
+        }
+        // Rally, DM-removal: ESC — игрок закончил выбор; невыбранные потеряют DM на NextPhase.
+        if (State.rallySubPhase === 'dmRemoval' && Object.values(State.units).some(u => u.dmRemovalHighlight)) {
+            gameLog('ESC — DM choice finished, the rest lose DM at NextPhase');
+            _finishSubRallyPhaseDMChoice();
             return;
         }
         // CCPh: Esc сбрасывает текущую не-подтверждённую VS-строку (пулы активной declaring стороны)
@@ -575,8 +581,14 @@ const handlers = {
         _clearRecoveryState();
         State.rallySubPhase = 'repair';
         State.rallySide = 'attacker';
-        UIState.fadeButton('EndDefenderRecovery');
-        _enterRepairForCurrentSide();
+        if (UIState.buttons['EndDefenderRecovery']) {   // кнопки были — подфаза завершена штатно (а не пропущена у обеих сторон)
+            UIState.removeButton('EndAttackerRecovery');   // вместо двух погасших кнопок — планка «ended»
+            UIState.removeButton('EndDefenderRecovery');
+            UIState.showRallyPlank('recoveryEnded');
+            _afterRallyDelay(_enterRepairForCurrentSide);   // планка «ended» держится, потом Repair
+        } else {
+            _enterRepairForCurrentSide();                   // пропущено у обеих — сразу в Repair
+        }
     },
 
     EndAttackerRepair: () => {
@@ -594,10 +606,14 @@ const handlers = {
         _clearRepairState();
         State.rallySubPhase = 'transfer';
         State.rallySide = 'attacker';
-        UIState.fadeButton('EndDefenderRepair');
-        UIState.addButton('EndAttackerTransfer', { x: 10, y: 200, label: 'EndAttackerTransfer' });
-        console.log('[RPh] attacker transfer starts');
-        gameLog('Rally: attacker Transfer');
+        if (UIState.buttons['EndDefenderRepair']) {   // кнопки были — подфаза завершена штатно (а не пропущена у обеих сторон)
+            UIState.removeButton('EndAttackerRepair');   // вместо двух погасших кнопок — планка «ended»
+            UIState.removeButton('EndDefenderRepair');
+            UIState.showRallyPlank('repairEnded');
+            _afterRallyDelay(startSubRallyTransfer);   // планка «ended» держится, потом Transfer
+        } else {
+            startSubRallyTransfer();                   // пропущено у обеих — сразу
+        }
     },
 
     SelectRepairHex: (ctx) => {
@@ -711,8 +727,10 @@ const handlers = {
         UIState.hideTransferPanel();
         State.rallySubPhase = 'selfRally';
         State.rallySide = 'attacker';
-        UIState.fadeButton('EndDefenderTransfer');
-        _enterSelfRallyForCurrentSide();
+        UIState.removeButton('EndAttackerTransfer');   // вместо двух погасших кнопок — планка «ended»
+        UIState.removeButton('EndDefenderTransfer');
+        UIState.showRallyPlank('transferEnded');
+        _afterRallyDelay(_enterSelfRallyForCurrentSide);   // планка держится, потом Self-Rally
     },
 
     EndAttackerSelfRally: () => {
@@ -728,10 +746,16 @@ const handlers = {
         // Обе стороны прошли Self-Rally → переход в Unit-Rally подфазу.
         _clearAllSelfRallyHighlights();
         _clearSelfRallyState();
-        UIState.fadeButton('EndDefenderSelfRally');
         State.rallySubPhase = 'unitRally';
         State.rallySide = 'attacker';
-        _enterUnitRallyForCurrentSide();
+        if (UIState.buttons['EndDefenderSelfRally']) {   // кнопки были — подфаза завершена штатно
+            UIState.removeButton('EndAttackerSelfRally');   // вместо двух погасших кнопок — планка «ended»
+            UIState.removeButton('EndDefenderSelfRally');
+            UIState.showRallyPlank('selfRallyEnded');
+            _afterRallyDelay(_enterUnitRallyForCurrentSide);   // планка «ended» держится, потом Unit-Rally
+        } else {
+            _enterUnitRallyForCurrentSide();                   // пропущено у обеих — сразу
+        }
     },
 
     SelectSelfRallyUnit: (ctx) => {
@@ -754,14 +778,22 @@ const handlers = {
         // Обе стороны прошли Unit-Rally → переход в DM-removal подфазу (step h правил).
         _clearAllUnitRallyHighlights();
         _clearUnitRallyState();
-        UIState.fadeButton('EndDefenderUnitRally');
-        _enterDMRemoval();
+        if (UIState.buttons['EndDefenderUnitRally']) {      // кнопки были — подфаза завершена штатно
+            UIState.removeButton('EndAttackerUnitRally');   // вместо двух погасших кнопок — планка «ended»
+            UIState.removeButton('EndDefenderUnitRally');
+            UIState.showRallyPlank('unitRallyEnded');
+            _afterRallyDelay(_enterDMRemoval);              // планка «ended» держится, потом DM-removal
+        } else {
+            _enterDMRemoval();                              // пропущено у обеих — сразу
+        }
     },
 
     ToggleKeepDM: (ctx) => {
         // Клик по подсвеченному DM-юниту: снимаем подсветку и помечаем "оставить DM".
         State.setUnit(ctx.unitId, 'dmRemovalHighlight', false);
         State.setUnit(ctx.unitId, 'DMkept', true);
+        UIState.setDMKeepLines(_dmKeepLinePoints());   // линия к выбранному юниту исчезает
+        if (_dmKeepLinePoints().length === 0) _finishSubRallyPhaseDMChoice();   // выбран последний — линий нет
         console.log(`[RPh DM] ${ctx.unitId} opt-keep DM`);
         gameLog(`    #${ctx.unitId} ${State.units[ctx.unitId].type}: keeps DM`);
     },
@@ -777,10 +809,11 @@ const handlers = {
         const u = State.units[State.unitRallyUnit];
         // Good Order лидеры в том же hex (эквивалент single-hex FG для calcLeadershipDRM).
         const leadersInHex = Object.values(State.units).filter(l =>
+            l.id !== u.id &&   // раллимый юнит (в т.ч. сломанный лидер) сам не руководит
             l.type === 'leader' && l.side === u.side &&
             !l.broken && !l.pinned && isSameHex(l.hex, u.hex)
         );
-        const leaderDRM = Rules.calcLeadershipDRM([u, ...leadersInHex]);
+        const leaderDRM = Rules.calcLeadershipDRM(leadersInHex);
         const { pass, originalTwelve } = Rules.rollRallyAttempt(u, { leaderDRM, kind: 'UnitRally' });
         State.setUnit(u.id, 'unitRallyAttempted', true);
 
@@ -915,6 +948,7 @@ const handlers = {
         const p = PhaseManager.next();
         UIState.rotateImage('turnphase', -45);   // 1/8 оборота против часовой (одна грань)
         console.log(`[phase] → ${p}`);
+        _refreshMeleeFlags();   // после каждой завершённой фазы снимаем inMelee там, где Melee уже нет
 
         // Начало MPh (A8.2): CX снимается с attacker-юнитов, но переносим его в флаг-память,
         // чтобы в этой MPh заблокировать DT тем, кто был CX в прошлой MPh.
@@ -955,6 +989,7 @@ const handlers = {
             UIState.removeButton('EndDefenderTransfer');
             UIState.removeButton('EndAttackerRecovery');
             UIState.removeButton('EndDefenderRecovery');
+            UIState.hideRallyPlanks();      // планка живёт до конца Rally, как раньше жили погасшие кнопки
             UIState.removeButton('EndAttackerRepair');
             UIState.removeButton('EndDefenderRepair');
             UIState.removeButton('EndAttackerSelfRally');
@@ -1831,6 +1866,16 @@ async function _resolveAmbushRound() {
     }
 }
 
+// Снимает inMelee с юнитов в гексах, где Melee уже нет (одна сторона осталась без юнитов или все оставшиеся broken).
+// Флаг ставится только в _finalizeCCHex, когда CC в гексе разыгран; здесь только снимаем.
+function _refreshMeleeFlags() {
+    for (const u of Object.values(State.units)) {
+        if (u.category !== 'infantry' || !u.inMelee || !u.hex) continue;
+        if (Rules.check_if_both_sides_still_in_hex(u.hex, State.units)) continue;   // Melee в этом гексе продолжается
+        State.setUnit(u.id, 'inMelee', false);
+    }
+}
+
 // Убирает currentCCHex из списка (или помечает Melee), гасит панель + кнопки.
 function _finalizeCCHex() {
     const hex = State.currentCCHex;
@@ -1905,18 +1950,37 @@ function _applyTransferIfReady() {
     _refreshTransferPanel();
 }
 
+// Планка пропущенной подфазы Rally: пока она висит, NextPhase, Save и Load неактивны; через паузу — следующая подфаза.
+function _afterRallyDelay(action) {
+    UIState.fadeButton('NextPhase');
+    UIState.fadeButton('Save');
+    UIState.fadeButton('Load');
+    setTimeout(() => {
+        UIState.redrawButton('NextPhase');   // возвращаем кнопки; если следующая подфаза тоже пропускается, она погасит их снова
+        UIState.redrawButton('Save');
+        if (hasSave()) UIState.redrawButton('Load');   // Load была серой без сейва — её не оживляем
+        action();
+    }, 800);
+}
+
+// Оружие без хозяина в гексе со своим Good Order юнитом стороны side, который ещё не пытался recovery в этом RPh.
+function _isRecoverableBy(w, side) {
+    return !w.possessorId && Object.values(State.units).some(u =>
+        u.category === 'infantry' &&
+        u.side === side &&
+        !u.broken && !u.pinned &&
+        !u.inMelee &&                 // юниты в Melee, кроме CC, ничего делать не могут
+        !u.recoveryAttempted &&
+        isSameHex(u.hex, w.hex)
+    );
+}
+
 // Пробегает по всем weapons: подсвечивает те, что unpossessed AND лежат в гексе со своим Good Order
 // юнитом (rallySide), который ещё не пытался recovery в этом RPh. Остальные — снимает подсветку.
 function _refreshRecoveryHighlights() {
     for (const w of Object.values(State.units)) {
         if (w.category !== 'carried') continue;
-        const eligible = !w.possessorId && Object.values(State.units).some(u =>
-            u.category === 'infantry' &&
-            u.side === State.rallySide &&
-            !u.broken && !u.pinned &&
-            !u.recoveryAttempted &&
-            isSameHex(u.hex, w.hex)
-        );
+        const eligible = _isRecoverableBy(w, State.rallySide);
         if (w.recoveryHighlight !== eligible) State.setUnit(w.id, 'recoveryHighlight', eligible);
     }
 }
@@ -1931,6 +1995,18 @@ function _autoEndRecoveryIfNoneLeft() {
 
 // Вход в Recovery подфазу для текущей стороны: highlight + auto-skip если нечего рекаверить.
 function _enterRecoveryForCurrentSide() {
+    // Общая проверка на входе в подфазу (attacker входит первым): нечего рекаверить ни у кого.
+    if (State.rallySide === 'attacker') {
+        const anyoneCanRecover = Object.values(State.units).some(w =>
+            w.category === 'carried' && (_isRecoverableBy(w, 'attacker') || _isRecoverableBy(w, 'defender')));
+        if (!anyoneCanRecover) {
+            console.log('[RPh] recovery: nothing to recover for both sides, skip');
+            gameLog('Rally: Recovery — nothing to recover for either side, skipped');
+            UIState.showRallyPlank('recoverySkipped');   // планка вместо двух неактивных кнопок
+            _afterRallyDelay(handlers.EndDefenderRecovery);   // через паузу в Repair, кнопки Recovery не создаются
+            return;
+        }
+    }
     _refreshRecoveryHighlights();
     // Кнопку рисуем всегда — чтобы при auto-skip она тоже отобразилась (сразу faded).
     const btn = State.rallySide === 'attacker' ? 'EndAttackerRecovery' : 'EndDefenderRecovery';
@@ -1961,20 +2037,23 @@ function _clearRecoveryState() {
     UIState.removeButton('RecoveryAttempt');
 }
 
+// Broken-оружие, чей possessor Good Order стороны side, не израсходовал repair-action и совпадает по нации.
+function _isRepairableBy(weapon, side) {
+    if (!(weapon.broken && weapon.possessorId)) return false;
+    const possessor = State.units[weapon.possessorId];
+    return possessor !== undefined
+        && possessor.side === side
+        && !possessor.broken && !possessor.pinned
+        && !possessor.repairAttempted
+        && weapon.nation === possessor.nation;
+}
+
 // Подсвечиваем broken-оружие, чей possessor Good Order своей стороны, не израсходовал repair-action
 // и совпадает по нации. Переиспользуем recoveryHighlight (подфазы Recovery/Repair взаимоисключающие).
 function _refreshRepairHighlights() {
     for (const weapon of Object.values(State.units)) {
         if (weapon.category !== 'carried') continue;
-        let eligible = false;
-        if (weapon.broken && weapon.possessorId) {
-            const possessor = State.units[weapon.possessorId];
-            eligible = !!possessor
-                && possessor.side === State.rallySide
-                && !possessor.broken && !possessor.pinned
-                && !possessor.repairAttempted
-                && weapon.nation === possessor.nation;
-        }
+        const eligible = _isRepairableBy(weapon, State.rallySide);
         if (weapon.recoveryHighlight !== eligible) State.setUnit(weapon.id, 'recoveryHighlight', eligible);
     }
 }
@@ -1987,21 +2066,44 @@ function _clearRepairState() {
 
 // Юнит eligible для self-rally: broken, свой, не израсходовал action, selfRally=true
 // ИЛИ один non-selfRally squad для attacker (бонусная попытка).
-function _isSelfRallyEligible(u) {
+function _isSelfRallyEligible(u, side) {
     if (u.category !== 'infantry') return false;
     if (!u.broken) return false;
-    if (u.side !== State.rallySide) return false;
+    if (u.side !== side) return false;
     if (u.selfRallyAttempted) return false;
     if (u.selfRally) return true;
-    if (State.rallySide !== 'attacker') return false;
+    if (side !== 'attacker') return false;
     if (State.attackerExtraMMCUsed) return false;
     return u.type === 'squad';
+}
+
+// Только для лога. Может ли сломанный юнит стороны side сделать Self-Rally и почему (повторяет условия _isSelfRallyEligible).
+function _selfRallyReasonForLog(u, side) {
+    if (_isSelfRallyEligible(u, side)) {
+        return u.selfRally ? 'can self-rally' : 'can self-rally (attacker bonus: one non-selfRally squad)';
+    }
+    if (u.selfRallyAttempted) return 'cannot — already attempted this Rally Phase';
+    if (side !== 'attacker') return 'cannot — no self-rally ability (only the attacker has a bonus attempt)';
+    if (State.attackerExtraMMCUsed) return 'cannot — attacker bonus attempt already used';
+    return 'cannot — not a squad, no self-rally ability';
+}
+
+// Только для лога. Пишет, кто из сломанных юнитов стороны side может сделать Self-Rally и почему.
+function _logSelfRallyConditionsForLog(side) {
+    const broken = Object.values(State.units).filter(u => u.category === 'infantry' && u.side === side && u.broken);
+    if (broken.length === 0) {
+        gameLog(`    ${side}: no broken units`);
+        return;
+    }
+    for (const u of broken) {
+        gameLog(`    ${side} #${u.id} ${u.type} (${hexLabel(u.hex.col, u.hex.row)}): ${_selfRallyReasonForLog(u, side)}`);
+    }
 }
 
 function _refreshSelfRallyHighlights() {
     for (const u of Object.values(State.units)) {
         if (u.category !== 'infantry') continue;
-        const eligible = _isSelfRallyEligible(u);
+        const eligible = _isSelfRallyEligible(u, State.rallySide);
         if (u.selfRallyHighlight !== eligible) State.setUnit(u.id, 'selfRallyHighlight', eligible);
     }
 }
@@ -2034,6 +2136,15 @@ function _isDMRemovalCandidate(u) {
     return true;
 }
 
+// Только для лога. Что будет с DM у юнита: можно оставить, остаётся сам (враг рядом) или снимется (укрытие).
+function _dmRemovalReasonForLog(u) {
+    const adjacentEnemy = Object.values(State.units).some(e =>
+        e.category === 'infantry' && e.side !== u.side && isAdjacent(u.hex, e.hex));
+    if (adjacentEnemy) return 'DM stays — enemy unit adjacent';
+    if (!_isDMRemovalCandidate(u)) return 'cannot keep DM — in cover (forest or building), DM will be removed';
+    return 'can keep DM (click to keep), otherwise DM will be removed';
+}
+
 // Вход в DM-removal подфазу: помечаем всех eligible юнитов, игрок кликами opt-keep'ает, NextPhase финализирует.
 function _enterDMRemoval() {
     State.rallySubPhase = 'dmRemoval';
@@ -2041,6 +2152,34 @@ function _enterDMRemoval() {
     for (const u of candidates) State.setUnit(u.id, 'dmRemovalHighlight', true);
     console.log(`[RPh DM] ${candidates.length} units highlighted — click to keep DM, NextPhase removes rest`);
     gameLog(`Rally: DM removal — ${candidates.length} unit(s) can keep DM (click them), the rest lose DM at NextPhase`);
+    // Причина по каждому юниту с DM.
+    for (const u of Object.values(State.units)) {
+        if (!u.desperationMorale || u.category !== 'infantry') continue;
+        gameLog(`    #${u.id} ${u.type} (${hexLabel(u.hex.col, u.hex.row)}): ${_dmRemovalReasonForLog(u)}`);
+    }
+    if (candidates.length > 0) {
+        UIState.showRallyPlank('dmKeepChoose');
+        UIState.setDMKeepLines(_dmKeepLinePoints());   // красные линии планка → юниты
+    } else {
+        UIState.showRallyPlank('rallyEnded');          // выбирать некого — сразу итоговая планка
+    }
+}
+
+// Выбор DM завершён (выбран последний юнит или ESC): гасим подсветку, убираем «Choose…» и линии, ставим итоговую планку.
+function _finishSubRallyPhaseDMChoice() {
+    for (const u of Object.values(State.units)) {
+        if (u.dmRemovalHighlight) State.setUnit(u.id, 'dmRemovalHighlight', false);
+    }
+    UIState.setDMKeepLines([]);
+    UIState.hideRallyPlank('dmKeepChoose');
+    UIState.showRallyPlank('rallyEnded');
+}
+
+// Центры юнитов (мировые координаты), у которых сейчас горит подсветка «можно оставить DM» — концы красных линий от планки.
+function _dmKeepLinePoints() {
+    return Object.values(State.units)
+        .filter(u => u.dmRemovalHighlight)
+        .map(u => ({ x: u.x + UNIT_IMAGE_SIZE / 2, y: u.y + UNIT_IMAGE_SIZE / 2 }));
 }
 
 // Если после попытки SelfRally никого не осталось в highlight — автоматом завершаем подфазу стороны.
@@ -2053,6 +2192,20 @@ function _autoEndSelfRallyIfNoneLeft() {
 
 // Вход в Self-Rally подфазу: highlight + auto-skip если некого раллить.
 function _enterSelfRallyForCurrentSide() {
+    // Общая проверка на входе в подфазу (attacker входит первым): некого раллить ни у кого.
+    if (State.rallySide === 'attacker') {
+        const anyoneCanRally = Object.values(State.units).some(u =>
+            _isSelfRallyEligible(u, 'attacker') || _isSelfRallyEligible(u, 'defender'));
+        if (!anyoneCanRally) {
+            console.log('[RPh] self-rally: nobody to rally for both sides, skip');
+            gameLog('Rally: Self-Rally — nobody to rally for either side, skipped');
+            _logSelfRallyConditionsForLog('attacker');
+            _logSelfRallyConditionsForLog('defender');
+            UIState.showRallyPlank('selfRallySkipped');   // планка вместо двух неактивных кнопок
+            _afterRallyDelay(handlers.EndDefenderSelfRally);   // через паузу в Unit-Rally, кнопки Self-Rally не создаются
+            return;
+        }
+    }
     _refreshSelfRallyHighlights();
     // Кнопку рисуем всегда — чтобы при auto-skip она тоже отобразилась (сразу faded).
     const btn = State.rallySide === 'attacker' ? 'EndAttackerSelfRally' : 'EndDefenderSelfRally';
@@ -2062,33 +2215,56 @@ function _enterSelfRallyForCurrentSide() {
     if (!hasAny) {
         console.log(`[RPh] ${State.rallySide} self-rally: nothing to rally, auto-skip`);
         gameLog(`Rally: ${State.rallySide} Self-Rally — nobody to rally, skipped`);
+        _logSelfRallyConditionsForLog(State.rallySide);
         if (State.rallySide === 'attacker') handlers.EndAttackerSelfRally();
         else                                 handlers.EndDefenderSelfRally();
         return;
     }
     console.log(`[RPh] ${State.rallySide} self-rally starts`);
     gameLog(`Rally: ${State.rallySide} Self-Rally`);
+    _logSelfRallyConditionsForLog(State.rallySide);
 }
 
 // Юнит eligible для unit-rally: broken, свой, не израсходовал action, не-лидер,
 // и в его hex есть Good Order лидер той же стороны (кто-то его раллит).
-function _isUnitRallyEligible(u) {
+function _isUnitRallyEligible(u, side) {
     if (u.category !== 'infantry') return false;
     if (!u.broken) return false;
-    if (u.side !== State.rallySide) return false;
+    if (u.side !== side) return false;
     if (u.unitRallyAttempted) return false;
-    if (u.type === 'leader') return false;
     return Object.values(State.units).some(l =>
-        l.type === 'leader' && l.side === State.rallySide &&
+        l.type === 'leader' && l.side === side &&
         !l.broken && !l.pinned &&
         isSameHex(l.hex, u.hex)
     );
 }
 
+// Только для лога. Причина, почему сломанный юнит стороны side может / не может пройти Unit-Rally.
+function _unitRallyReasonForLog(u, side) {
+    if (_isUnitRallyEligible(u, side)) return 'can be unit-rallied';
+    if (u.unitRallyAttempted) return 'cannot — already attempted this Rally Phase';
+    const leaderInHex = Object.values(State.units).some(l =>
+        l.type === 'leader' && l.side === side && isSameHex(l.hex, u.hex));
+    if (!leaderInHex) return 'cannot — no leader in hex';
+    return 'cannot — leader in hex is broken or pinned';
+}
+
+// Только для лога. По каждому сломанному юниту стороны — может ли он пройти Unit-Rally и почему.
+function _logUnitRallyConditionsForLog(side) {
+    const broken = Object.values(State.units).filter(u => u.category === 'infantry' && u.side === side && u.broken);
+    if (broken.length === 0) {
+        gameLog(`    ${side}: no broken units`);
+        return;
+    }
+    for (const u of broken) {
+        gameLog(`    ${side} #${u.id} ${u.type} (${hexLabel(u.hex.col, u.hex.row)}): ${_unitRallyReasonForLog(u, side)}`);
+    }
+}
+
 function _refreshUnitRallyHighlights() {
     for (const u of Object.values(State.units)) {
         if (u.category !== 'infantry') continue;
-        const eligible = _isUnitRallyEligible(u);
+        const eligible = _isUnitRallyEligible(u, State.rallySide);
         if (u.unitRallyHighlight !== eligible) State.setUnit(u.id, 'unitRallyHighlight', eligible);
     }
 }
@@ -2109,6 +2285,20 @@ function _clearUnitRallyState() {
 
 // Вход в Unit-Rally подфазу: highlight + auto-skip если некого раллить.
 function _enterUnitRallyForCurrentSide() {
+    // Общая проверка на входе в подфазу (attacker входит первым): некого раллить ни у кого.
+    if (State.rallySide === 'attacker') {
+        const anyoneCanRally = Object.values(State.units).some(u =>
+            _isUnitRallyEligible(u, 'attacker') || _isUnitRallyEligible(u, 'defender'));
+        if (!anyoneCanRally) {
+            console.log('[RPh] unit-rally: nobody to rally for both sides, skip');
+            gameLog('Rally: Unit Rally — nobody to rally for either side, skipped');
+            _logUnitRallyConditionsForLog('attacker');
+            _logUnitRallyConditionsForLog('defender');
+            UIState.showRallyPlank('unitRallySkipped');   // планка вместо двух неактивных кнопок
+            _afterRallyDelay(handlers.EndDefenderUnitRally);   // через паузу в DM-removal, кнопки Unit-Rally не создаются
+            return;
+        }
+    }
     _refreshUnitRallyHighlights();
     // Кнопку рисуем всегда — чтобы при auto-skip она тоже отобразилась (сразу faded).
     const btn = State.rallySide === 'attacker' ? 'EndAttackerUnitRally' : 'EndDefenderUnitRally';
@@ -2118,12 +2308,14 @@ function _enterUnitRallyForCurrentSide() {
     if (!hasAny) {
         console.log(`[RPh] ${State.rallySide} unit-rally: nothing to rally, auto-skip`);
         gameLog(`Rally: ${State.rallySide} Unit Rally — nobody to rally, skipped`);
+        _logUnitRallyConditionsForLog(State.rallySide);
         if (State.rallySide === 'attacker') handlers.EndAttackerUnitRally();
         else                                 handlers.EndDefenderUnitRally();
         return;
     }
     console.log(`[RPh] ${State.rallySide} unit-rally starts`);
     gameLog(`Rally: ${State.rallySide} Unit Rally`);
+    _logUnitRallyConditionsForLog(State.rallySide);
 }
 
 // Если после попытки Repair не осталось подсвеченных weapon'ов — auto-end подфазы стороны.
@@ -2138,6 +2330,18 @@ function _autoEndRepairIfNoneLeft() {
 // Если нечего ремонтировать — автопереход в следующую подфазу через соответствующий End-handler,
 // чтобы игрок не нажимал бесполезную кнопку.
 function _enterRepairForCurrentSide() {
+    // Общая проверка на входе в подфазу (attacker входит первым): нечего ремонтировать ни у кого.
+    if (State.rallySide === 'attacker') {
+        const anyoneCanRepair = Object.values(State.units).some(w =>
+            w.category === 'carried' && (_isRepairableBy(w, 'attacker') || _isRepairableBy(w, 'defender')));
+        if (!anyoneCanRepair) {
+            console.log('[RPh] repair: nothing to repair for both sides, skip');
+            gameLog('Rally: Repair — nothing to repair for either side, skipped');
+            UIState.showRallyPlank('repairSkipped');   // планка вместо двух неактивных кнопок
+            _afterRallyDelay(handlers.EndDefenderRepair);   // через паузу в Transfer, кнопки Repair не создаются
+            return;
+        }
+    }
     _refreshRepairHighlights();
     // Кнопку рисуем всегда — чтобы при auto-skip она тоже отобразилась (сразу faded).
     const btn = State.rallySide === 'attacker' ? 'EndAttackerRepair' : 'EndDefenderRepair';
@@ -2155,6 +2359,13 @@ function _enterRepairForCurrentSide() {
     }
     console.log(`[RPh] ${State.rallySide} repair starts`);
     gameLog(`Rally: ${State.rallySide} Repair`);
+}
+
+// Вход в Transfer-подфазу: кнопка attacker'а.
+function startSubRallyTransfer() {
+    UIState.addButton('EndAttackerTransfer', { x: 10, y: 200, label: 'EndAttackerTransfer' });
+    console.log('[RPh] attacker transfer starts');
+    gameLog('Rally: attacker Transfer');
 }
 
 // Помечает хекс как CC-hex если там есть enemy infantry (после Advance-хода).
@@ -2938,6 +3149,7 @@ function _replace_unit(oldId, newTemplateId, newId) {
 
     const inherit = {
         broken:                 old.broken,
+        inMelee:                old.inMelee,   // HS из сквада в Melee остаётся в Melee
         desperationMorale:      old.desperationMorale,
         pinned:                 old.pinned,
         exhausted:              old.exhausted,

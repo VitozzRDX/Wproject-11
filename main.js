@@ -581,6 +581,7 @@ async function init() {
             stage.y(stage.y() + dy);
             uiLayer.x(-stage.x());   // синхронизация: UI на месте на экране
             uiLayer.y(-stage.y());
+            RendererUI.refreshDMKeepLines();   // линии DM следуют за камерой
             stage.batchDraw();
         }
         requestAnimationFrame(scrollLoop);

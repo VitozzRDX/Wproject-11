@@ -1352,17 +1352,17 @@ function rollAmbush(hex, units) {
     return null;
 }
 
-// В hex'е есть infantry обеих сторон (attacker + defender) → Melee.
+// В hex'е есть infantry обеих сторон (attacker + defender), и хотя бы один из них unbroken → Melee.
 function check_if_both_sides_still_in_hex(hex, units) {
-    let hasAtk = false, hasDef = false;
+    let hasAtk = false, hasDef = false, hasUnbroken = false;
     for (const u of Object.values(units)) {
         if (u.category !== 'infantry') continue;
         if (!isSameHex(u.hex, hex)) continue;
+        if (!u.broken) hasUnbroken = true;
         if (u.side === 'attacker') hasAtk = true;
         else if (u.side === 'defender') hasDef = true;
-        if (hasAtk && hasDef) return true;
     }
-    return false;
+    return hasAtk && hasDef && hasUnbroken;
 }
 
 function interdictionAttack(unit, escortLeader = null) {

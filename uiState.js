@@ -188,6 +188,21 @@ export const UIState = {
     hideAmbushInfoPlank() {
         this.subscribers.forEach(sub => sub('hideAmbushInfoPlank', null, {}));
     },
+    // Планка подфазы Rally на месте двух кнопок End…. key: recoverySkipped / recoveryEnded / repairSkipped / repairEnded.
+    showRallyPlank(key) {
+        this.subscribers.forEach(sub => sub('showRallyPlank', key, {}));
+    },
+    hideRallyPlanks() {
+        this.subscribers.forEach(sub => sub('hideRallyPlanks', null, {}));
+    },
+    // Красные линии от планки DM к центрам юнитов. points: [{x, y}] — центры юнитов в мировых координатах.
+    setDMKeepLines(points) {
+        this.subscribers.forEach(sub => sub('setDMKeepLines', null, { points }));
+    },
+    // Убрать одну планку Rally по ключу (остальные остаются).
+    hideRallyPlank(key) {
+        this.subscribers.forEach(sub => sub('hideRallyPlank', key, {}));
+    },
     hideActiveSidePlank() {
         this.subscribers.forEach(sub => sub('hideActiveSidePlank', null, null));
     },
